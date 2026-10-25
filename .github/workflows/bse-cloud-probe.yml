@@ -1,0 +1,74 @@
+name: BSE Cloud Browser Reachability Test
+on:
+  push:
+    branches:
+      - titan-bse-cloud-probe-20261025
+permissions:
+  contents: read
+jobs:
+  bse-reachability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Install cloud Chromium
+        run: |
+          python -m pip install --quiet playwright==1.58.0
+          python -m playwright install --with-deps chromium
+      - name: Visit BSE and test actual menu controls
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          import traceback
+          from playwright.sync_api import sync_playwright
+
+          report={"test":"BSE official homepage and interactive menu","root":"https://www.bseindia.com/","steps":[],"result":"FAILED"}
+          browser=None
+          try:
+              with sync_playwright() as p:
+                  browser=p.chromium.launch(headless=True)
+                  context=browser.new_context(accept_downloads=True)
+                  page=context.new_page()
+                  response=page.goto("https://www.bseindia.com/", wait_until="domcontentloaded", timeout=35000)
+                  status=response.status if response else None
+                  report["steps"].append({"step":"open_homepage","http_status":status,"url":page.url,"title":page.title()[:120]})
+                  print("BSE home HTTP:",status, "URL:",page.url)
+                  page.screenshot(path="bse-cloud-home.png",full_page=False,timeout=10000)
+                  if status is None or status>=400:
+                      raise RuntimeError("BSE rejected the GitHub cloud browser at homepage with HTTP "+str(status))
+                  equity=page.get_by_text(re.compile(r"^Equity$",re.I)).first
+                  equity.wait_for(state="visible", timeout=12000)
+                  equity.hover()
+                  report["steps"].append({"step":"equity_menu_hovered"})
+                  reports=page.get_by_text(re.compile(r"End of Day Reports",re.I)).first
+                  reports.wait_for(state="visible",timeout=12000)
+                  reports.hover()
+                  report["steps"].append({"step":"end_of_day_reports_hovered"})
+                  bhav=page.get_by_text(re.compile(r"Bhav Copy",re.I)).last
+                  bhav.wait_for(state="visible",timeout=12000)
+                  bhav.click()
+                  page.wait_for_load_state("domcontentloaded",timeout=12000)
+                  report["steps"].append({"step":"bhav_copy_opened","url":page.url})
+                  print("BSE Bhav Copy page:",page.url)
+                  page.screenshot(path="bse-cloud-bhavcopy.png",full_page=False,timeout=10000)
+                  report["result"]="PASS_HOME_AND_BHAVCOPY_PAGE"
+          except Exception as exc:
+              report["error"]=str(exc)[:800]
+              print("BSE browser test failed:",report["error"])
+          finally:
+              with open("bse-cloud-probe.json","w",encoding="utf8") as f:
+                  json.dump(report,f,indent=2)
+              print(json.dumps(report,indent=2))
+          if report["result"]!="PASS_HOME_AND_BHAVCOPY_PAGE":
+              raise SystemExit(1)
+          PY
+      - name: Upload diagnostic receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bse-cloud-browser-probe
+          path: |
+            bse-cloud-probe.json
+            bse-cloud-home.png
+            bse-cloud-bhavcopy.png
+          retention-days: 1
