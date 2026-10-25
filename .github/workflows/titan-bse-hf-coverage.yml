@@ -1,0 +1,42 @@
+name: TITAN verify accessible public BSE parquet coverage
+on:
+  push:
+    branches: [titan-bse-parquet-coverage-20261026]
+permissions:
+  contents: read
+jobs:
+  verify-bse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read BSE date 23-Oct-2026 from free public dataset
+        run: |
+          python -m pip install --quiet duckdb
+          python - <<'PY'
+          import urllib.request, json, hashlib
+          from pathlib import Path
+          import duckdb
+          url='https://huggingface.co/datasets/tejhq/indian-markets/resolve/main/bse/year%3D2026/bse_2026.parquet'
+          path=Path("bse_2026.parquet")
+          with urllib.request.urlopen(url,timeout=35) as response:
+              with path.open("wb") as f:
+                  while True:
+                      chunk=response.read(1024*1024)
+                      if not chunk: break
+                      f.write(chunk)
+          con=duckdb.connect()
+          fields=con.execute("DESCRIBE SELECT * FROM read_parquet(?)",[str(path)]).fetchall()
+          data=con.execute("SELECT CAST(date AS VARCHAR) as day, count(*) n, count(distinct isin) n_isin FROM read_parquet(?) WHERE date in (DATE '2026-10-23',DATE '2026-10-22') GROUP BY date ORDER BY date DESC",[str(path)]).fetchall()
+          bse=con.execute("SELECT symbol,series,isin,close,volume FROM read_parquet(?) WHERE date=DATE '2026-10-23' LIMIT 5",[str(path)]).fetchall()
+          status={"source":url,"raw_original_bse_expected_rows":5150,"download_bytes":path.stat().st_size,"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"parquet_columns":[x[0] for x in fields],"day_counts":[{"date":x[0],"rows":x[1],"distinct_isins":x[2]} for x in data],"examples":[list(x) for x in bse]}
+          with open("bse-open-dataset-coverage.json","w") as f:json.dump(status,f,indent=2)
+          print(json.dumps(status,indent=2))
+          if not any(x[0]=="2026-10-23" and x[1]>0 for x in data):raise SystemExit("BSE target day absent in published dataset")
+          PY
+      - name: Archive coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bse-open-data-coverage
+          path: bse-open-dataset-coverage.json
+          retention-days: 1
