@@ -1,0 +1,62 @@
+name: TITAN BSE Alternative Public Data Cloud Probe
+on:
+  push:
+    branches: [titan-bse-cloud-probe-20261025]
+permissions:
+  contents: read
+jobs:
+  public-bse-data-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Probe third-party published public BSE UDiFF data
+        run: |
+          python - <<'PY'
+          import csv, io, json, gzip
+          from urllib.request import urlopen, Request
+          from urllib.error import HTTPError, URLError
+
+          urls = [
+            ("mtf-api", "https://mtf.trading/api/v1/bhavcopy?date=2026-10-23&exchange=bse&format=csv&limit=100000"),
+            ("mtf-static", "https://mtf.trading/bhavcopy/20261023.csv.gz"),
+          ]
+          results=[]
+          for name,url in urls:
+              rec={"source":name,"url":url,"expected_bse_rows_from_user_original":5150}
+              try:
+                  with urlopen(Request(url),timeout=35) as resp:
+                      raw=resp.read(7000000)
+                      rec["http_status"]=resp.status
+                      rec["content_type"]=resp.headers.get("Content-Type")
+                      rec["bytes_received"]=len(raw)
+                  if raw[:2]==b'\x1f\x8b':
+                      raw=gzip.decompress(raw)
+                  csvtxt=raw.decode("utf-8-sig")
+                  rows=csv.DictReader(io.StringIO(csvtxt))
+                  rec["columns"]=rows.fieldnames
+                  material=list(rows)
+                  rec["total_records"]=len(material)
+                  if 'exchange' in (rows.fieldnames or []):
+                      for exch in sorted(set(x.get('exchange','').upper() for x in material)):
+                          rec.setdefault("exchange_rows",{})[exch]=sum(x.get('exchange','').upper()==exch for x in material)
+                  rec["has_core_fields"]=all(x in (rows.fieldnames or []) for x in ['ISIN','OpnPric','HghPric','LwPric','ClsPric','TtlTradgVol'])
+                  rec["result"]="DATA_RETURNED" if rec["has_core_fields"] and len(material)>0 else "BAD_DATA"
+              except HTTPError as e:
+                  rec.update({"http_status":e.code,"result":"HTTP_ERROR","error":str(e)[:180]})
+              except Exception as e:
+                  rec.update({"result":"ERROR","error":str(e)[:250]})
+              results.append(rec)
+              print(name, "http",rec.get("http_status"),"rows",rec.get("total_records"),"exchange_rows",rec.get("exchange_rows"),"result",rec["result"])
+          with open("bse-alternative-probe.json","w") as f:
+              json.dump(results,f,indent=2)
+          print(json.dumps(results,indent=2)[:6500])
+          if not any(x.get("result")=="DATA_RETURNED" for x in results):
+              raise SystemExit(1)
+          PY
+      - name: Upload diagnostic receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bse-alternative-data-probe
+          path: bse-alternative-probe.json
+          retention-days: 2
