@@ -1,0 +1,60 @@
+name: TITAN public BSE dataset alternative probe
+on:
+  push:
+    branches:
+      - titan-public-bse-dataset-probe-20261026
+permissions:
+  contents: read
+jobs:
+  test-public-datasets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Test public BSE historical dataset reachability
+        run: |
+          python - <<'PY'
+          import json, urllib.request, urllib.error
+          tests=[
+          ("tej-status","https://api.tejhq.dev/v1/status","GET"),
+          ("tej-snapshot","https://api.tejhq.dev/v1/snapshot?exchange=bse&date=2026-10-23","GET"),
+          ("huggingface-metadata","https://huggingface.co/api/datasets/tejhq/indian-markets","GET"),
+          ("huggingface-bse-parquet","https://huggingface.co/datasets/tejhq/indian-markets/resolve/main/bse/year%3D2026/bse_2026.parquet","HEAD")
+          ]
+          results=[]
+          for name,url,method in tests:
+              result={"name":name,"url":url}
+              try:
+                  req=urllib.request.Request(url,method=method)
+                  with urllib.request.urlopen(req,timeout=18) as resp:
+                      data=b"" if method=="HEAD" else resp.read(2000000)
+                      result.update({"status":resp.status,"content_type":resp.headers.get("Content-Type"),"content_length":resp.headers.get("Content-Length"),"received_bytes":len(data)})
+                      if method!="HEAD":
+                          try:
+                              obj=json.loads(data)
+                              result["parsed_json"]=True
+                              if isinstance(obj,dict):
+                                  result["root_keys"]=list(obj.keys())[:16]
+                                  for k in ["count","total","records","date","asOf","as_of","last_trading_date"]:
+                                      if k in obj and isinstance(obj[k],(str,int,float)):
+                                          result[k]=obj[k]
+                              elif isinstance(obj,list):
+                                  result["list_length"]=len(obj)
+                          except Exception:
+                              result["parsed_json"]=False
+                  result["result"]="HTTP_OK"
+              except urllib.error.HTTPError as e:
+                  result.update({"result":"HTTP_ERROR","http_status":e.code,"error":str(e)[:180]})
+              except Exception as e:
+                  result.update({"result":"ERROR","error":str(e)[:180]})
+              results.append(result)
+              print(json.dumps(result))
+          with open("titan-public-bse-alternative.json","w") as f: json.dump(results,f,indent=2)
+          if not any(r.get("result")=="HTTP_OK" for r in results): raise SystemExit(1)
+          PY
+      - name: Preserve status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-bse-public-alternative-probe
+          path: titan-public-bse-alternative.json
+          retention-days: 1
