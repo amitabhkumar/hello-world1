@@ -1,0 +1,47 @@
+name: TITAN 27 Oct official index universe fallback
+on:
+  push:
+    branches: [titan-nse-27oct-postmarket-data-probe]
+permissions:
+  contents: read
+jobs:
+  fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check official NSE market-wide alternative endpoints
+        run: |
+          python - <<'PY'
+          import requests,json,datetime
+          s=requests.Session();s.headers.update({"User-Agent":"Mozilla/5.0","Accept":"application/json","Referer":"https://www.nseindia.com/"})
+          urls=[("nifty500","https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500"),("total_market","https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20TOTAL%20MARKET"),("variations","https://www.nseindia.com/api/live-analysis-variations?index=all")]
+          out={"retrieved_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),"endpoints":[]}
+          targets=set("SONACOMS DALBHARAT TATACONSUM SSWL RECLTD AEQUS MANKIND APOLLO E2E ITCHOTELS PAYTM NAZARA TMCV ATHERENERG NETWEB AUBANK INFY CYIENT CASTROLIND KEC IGIL SEPC IDFCFIRSTB".split())
+          for name,url in urls:
+            rec={"name":name,"url":url}
+            try:
+              r=s.get(url,timeout=15);rec.update({"http":r.status_code,"bytes":len(r.content)})
+              if r.ok:
+                d=r.json();rec["keys"]=list(d) if isinstance(d,dict) else []
+                a=d.get("data",[]) if isinstance(d,dict) else d
+                if isinstance(a,dict):a=list(a.values())
+                if isinstance(a,list):
+                  rec["rows"]=len(a);rec["first"]=a[0] if a else None
+                  rec["named"]=[x for x in a if isinstance(x,dict) and x.get("symbol") in targets]
+                  scored=[x for x in a if isinstance(x,dict) and isinstance(x.get("pChange"),(int,float))]
+                  rec["positive20"]=sorted(scored,key=lambda x:-x["pChange"])[:20]
+                  rec["negative20"]=sorted(scored,key=lambda x:x["pChange"])[:20]
+            except Exception as e:rec["error"]=str(e)[:160]
+            out["endpoints"].append(rec)
+          with open("nse_fallback.json","w") as f:json.dump(out,f,indent=2)
+          print("TITAN_FALLBACK_START")
+          print(json.dumps(out,separators=(",",":")))
+          print("TITAN_FALLBACK_END")
+          PY
+      - name: Archive fallback
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-27oct-index-fallback
+          path: nse_fallback.json
+          retention-days: 1
