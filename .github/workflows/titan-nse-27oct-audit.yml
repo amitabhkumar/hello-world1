@@ -1,0 +1,76 @@
+name: TITAN NSE 27 Oct 2026 official bulk audit
+on:
+  push:
+    branches: [titan-nse-27oct-postmarket-data-probe]
+permissions:
+  contents: read
+jobs:
+  verify-session-bulk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download and validate NSE 27 October bulk data
+        run: |
+          python - <<'PY'
+          import requests,csv,io,zipfile,json,hashlib,datetime,collections
+          urls=[
+           ("udiff","https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20261027_F_0000.csv.zip"),
+           ("delivery","https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_27102026.csv"),
+           ("index","https://nsearchives.nseindia.com/content/indices/ind_close_all_27102026.csv")]
+          out={"requested_session":"2026-10-27","retrieved_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),"sources":[]}
+          datasets={}
+          sess="2026-10-27"
+          for name,url in urls:
+            rec={"name":name,"url":url}
+            try:
+              r=requests.get(url,timeout=35,headers={"User-Agent":"Mozilla/5.0","Accept":"*/*"})
+              rec.update({"http":r.status_code,"bytes":len(r.content),"content_type":r.headers.get("content-type"),"sha256":hashlib.sha256(r.content).hexdigest() if r.ok else None})
+              if r.ok and len(r.content)>300:
+                data=r.content
+                if data[:2]==b'PK':
+                  z=zipfile.ZipFile(io.BytesIO(data));rec["zip_names"]=z.namelist();data=z.read(next(n for n in z.namelist() if n.lower().endswith('.csv')))
+                txt=data.decode("utf-8-sig",errors="replace")
+                rd=csv.DictReader(io.StringIO(txt));rows=[{k.strip():v.strip() if isinstance(v,str) else v for k,v in row.items()} for row in rd]
+                rec.update({"rows":len(rows),"columns":list(rows[0]) if rows else [],"date_sample":{k:rows[0].get(k) for k in ['TradDt','BizDt','DATE1','Date','Index Date'] if rows and k in rows[0]}})
+                datasets[name]=rows
+            except Exception as e:rec["error"]=str(e)[:240]
+            out["sources"].append(rec)
+          def num(v):
+            try:return float(str(v).replace(",",""))
+            except:return None
+          raw=datasets.get("udiff",[])
+          if raw and 'TckrSymb' in raw[0]:
+            rows=[]
+            for x in raw:
+              if x.get('FinInstrmTp')!='STK' or x.get('SctySrs') not in ('EQ','BE','SM','ST','BZ'):continue
+              sym=x.get('TckrSymb');pc=num(x.get('PrvsClsgPric'));cl=num(x.get('ClsPric'));o=num(x.get('OpnPric'));h=num(x.get('HghPric'));l=num(x.get('LwPric'));vol=num(x.get('TtlTradgVol'))
+              if not sym or not pc or not cl or pc<=0 or not o or not h or not l or min(o,h,l,cl)<=0 or not l<=min(o,cl)<=max(o,cl)<=h:continue
+              rows.append({"ticker":sym,"series":x.get("SctySrs"),"isin":x.get("ISIN"),"prev_close":pc,"open":o,"high":h,"low":l,"close":cl,"volume":vol,"return_pct":round(100*(cl/pc-1),5),"gap_pct":round(100*(o/pc-1),5),"open_to_close_pct":round(100*(cl/o-1),5)})
+            out["udiff_ordinary_rows_valid_ohlc"]=len(rows)
+            out["udiff_ordinary_series_counts"]=dict(collections.Counter(x["series"] for x in rows))
+            out["udiff_session_date_sample"]=raw[0].get("TradDt")
+            out["top20_positive"]=sorted([x for x in rows if x['return_pct']>0],key=lambda x:(-x['return_pct'],x['ticker']))[:20]
+            out["top20_negative"]=sorted([x for x in rows if x['return_pct']<0],key=lambda x:(x['return_pct'],x['ticker']))[:20]
+            named="SONACOMS DALBHARAT TATACONSUM SSWL RECLTD AEQUS MANKIND APOLLO E2E ITCHOTELS PAYTM NAZARA TMCV ATHERENERG NETWEB AUBANK INFY CYIENT CASTROLIND KEC IGIL SEPC IDFCFIRSTB".split()
+            out["named_rows"]={s:[x for x in rows if x['ticker']==s] for s in named}
+          dl=datasets.get("delivery",[])
+          if dl:
+            out["delivery_rows"]=len(dl)
+            out["delivery_date_sample"]={k:dl[0].get(k) for k in dl[0] if 'DATE' in k.upper()}
+            out["delivery_named"]={s:[x for x in dl if x.get("SYMBOL")==s][:1] for s in ["SONACOMS","DALBHARAT","TATACONSUM","SSWL","RECLTD","PAYTM","NAZARA"]}
+          ix=datasets.get("index",[])
+          if ix:
+            out["index_matches"]=[x for x in ix if any(v in str(x).upper() for v in ["NIFTY 50","NIFTY 500","NIFTY IT","NIFTY BANK"])][:15]
+          with open("nse_27oct_probe.json","w") as f:json.dump(out,f,indent=2)
+          print("TITAN_NSE_AUDIT_JSON_START")
+          print(json.dumps(out,separators=(",",":")))
+          print("TITAN_NSE_AUDIT_JSON_END")
+          if not raw or not out.get("top20_positive"):raise SystemExit("Official 27 Oct UDiFF unavailable or invalid")
+          PY
+      - name: Archive diagnostic receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-nse-27oct-audit
+          path: nse_27oct_probe.json
+          retention-days: 2
