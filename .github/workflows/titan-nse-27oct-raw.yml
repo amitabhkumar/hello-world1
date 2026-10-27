@@ -1,0 +1,37 @@
+name: TITAN official NSE 27 Oct UDiFF raw capture
+on:
+  push:
+    branches: [titan-nse-27oct-postmarket-data-probe]
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Capture date-validated NSE original UDiFF
+        run: |
+          python - <<'PY'
+          import requests,zipfile,io,csv,hashlib,json
+          url='https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20261027_F_0000.csv.zip'
+          r=requests.get(url,timeout=30,headers={'User-Agent':'Mozilla/5.0'})
+          print('HTTP',r.status_code,'bytes',len(r.content))
+          if r.status_code!=200:raise SystemExit(1)
+          z=zipfile.ZipFile(io.BytesIO(r.content));n=next(n for n in z.namelist() if n.lower().endswith('.csv'))
+          content=z.read(n).decode('utf-8-sig')
+          rd=csv.DictReader(io.StringIO(content));rows=list(rd)
+          dates=set(x.get('TradDt') for x in rows)
+          if dates!={'2026-10-27'}:raise SystemExit('Embedded dates mismatch '+str(dates))
+          with open('BhavCopy_NSE_CM_0_0_0_20261027_F_0000.csv.zip','wb') as f:f.write(r.content)
+          with open('nse_27oct_raw_manifest.json','w') as f:json.dump({'url':url,'dates':list(dates),'raw_rows':len(rows),'zip_sha256':hashlib.sha256(r.content).hexdigest(),'embedded_file':n},f,indent=2)
+          print('DATE_VALIDATED',dates,'ROWS',len(rows),'SHA256',hashlib.sha256(r.content).hexdigest())
+          PY
+      - name: Archive official original
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-nse-27oct-original-udiff
+          path: |
+            BhavCopy_NSE_CM_0_0_0_20261027_F_0000.csv.zip
+            nse_27oct_raw_manifest.json
+          retention-days: 2
