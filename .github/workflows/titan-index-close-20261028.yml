@@ -1,0 +1,42 @@
+name: TITAN 28 Oct official NSE benchmark close
+on:
+  push:
+    branches: [titan-nse-postmarket-20261028]
+permissions:
+  contents: read
+jobs:
+  official-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Download and validate 28 Oct NSE official index close
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,csv,io,json,hashlib
+          from pathlib import Path
+          from datetime import datetime,timezone
+          Path('output').mkdir(exist_ok=True)
+          out=[]
+          for day in ['28102026','27102026','26102026','23102026']:
+              url=f'https://nsearchives.nseindia.com/content/indices/ind_close_all_{day}.csv'
+              x={'datecode':day,'url':url,'retrieved_utc':datetime.now(timezone.utc).isoformat()}
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=30) as r:b=r.read(4000000);x['http_status']=r.status
+                  rows=list(csv.DictReader(io.StringIO(b.decode('utf-8-sig'))))
+                  cols=rows[0].keys() if rows else []
+                  hits=[r for r in rows if (r.get('Index Name') or r.get('IndexName') or '').strip().upper()=='NIFTY 50']
+                  x.update({'status':'VALIDATED' if hits else 'NO_NIFTY_50','rows':len(rows),'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b),'nifty50':hits[:1],'columns':list(cols)})
+                  if hits:(Path('output')/f'ind_close_all_{day}.csv').write_bytes(b)
+              except urllib.error.HTTPError as e:x.update({'status':'HTTP_ERROR','http_status':e.code})
+              except Exception as e:x.update({'status':'ERROR','error':str(e)[:200]})
+              print(json.dumps(x)[:1500]);out.append(x)
+          (Path('output')/'manifest.json').write_text(json.dumps(out,indent=2))
+          if not any(x['datecode']=='28102026' and x['status']=='VALIDATED' for x in out):raise SystemExit('28 Oct index not yet available')
+          PY
+      - name: Preserve official index data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-nse-index-28oct
+          path: output/
+          retention-days: 7
