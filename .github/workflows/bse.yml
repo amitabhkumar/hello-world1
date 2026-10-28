@@ -30,7 +30,7 @@ jobs:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -v
   download:
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[bse-live]')
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -4,7 +4,7 @@ This repository contains a normal-browser adaptation of the supplied working dow
 
 ## Operation
 
-The BSE Bhavcopy GitHub Actions workflow runs at 08:30 IST weekdays, 16:30 IST weekdays, 22:00 IST daily, and 08:00 IST Saturday. Pushes run offline tests only. Actions → BSE Bhavcopy → Run workflow starts a live run; optionally supply YYYY-MM-DD. Public-repository standard GitHub runners require no paid data subscription. No paid service or new billing plan is configured.
+The BSE Bhavcopy GitHub Actions workflow runs at 08:30 IST weekdays, 16:30 IST weekdays, 22:00 IST daily, and 08:00 IST Saturday. Pushes run offline tests only unless the commit message explicitly includes `[bse-live]` for a deployment acceptance check. Actions → BSE Bhavcopy → Run workflow starts a live run; optionally supply YYYY-MM-DD. Public-repository standard GitHub runners require no paid data subscription. No paid service or new billing plan is configured.
 
 Before 16:30 IST it checks up to 14 prior calendar dates for a published report, including special weekend sessions. At/after 16:30 it requires the current date. An explicit date overrides this. Missing reports are never relabelled, and publication history is not treated as a verified holiday calendar. The SOP task must separately verify the official trading calendar, missing sessions, and report freshness. A layout timeout is a failure, not proof of a holiday. Selectors follow the user-supplied navigation and remain subject to BSE UI changes.
 
