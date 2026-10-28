@@ -1,0 +1,38 @@
+name: TITAN 28 Oct morning new-candidate prior-close checks
+on:
+  push:
+    branches: [titan-nse-newcandidates-20261028]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Validate 27 Oct official prices for new issuer candidates
+        run: |
+          python - <<'PY'
+          import urllib.request,zipfile,io,csv,json
+          u="https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20261027_F_0000.csv.zip"
+          with urllib.request.urlopen(u,timeout=30) as r: raw=r.read()
+          z=zipfile.ZipFile(io.BytesIO(raw))
+          rows=list(csv.DictReader(io.StringIO(z.read(z.namelist()[0]).decode("utf-8-sig"))))
+          targets={"WAAREEENER","ROUTE","STERTOOLS","SCHAEFFLER","SUBROS","MARINE","KARAMTARA","WABAG","PFS","SBILIFE","JIOP","ACUTAAS","ONESOURCE","HILINFRA","BBL","KIRLPNU","HUHTAMAKI","DALBHARAT","AEQUS","ATHERENERG","TATASTEEL","VINYLINDIA","VSSL","ZAGGLE","PAYTM","RAYMOND","TATACAP","LTFOODS","WAAREERTL"}
+          def num(v):
+              try:return float(v or 0)
+              except:return 0
+          out=[]
+          for x in rows:
+              if x.get("TckrSymb") in targets:
+                  p=num(x.get("PrvsClsgPric"));c=num(x.get("ClsPric"))
+                  out.append({"ticker":x.get("TckrSymb"),"series":x.get("SctySrs"),"isin":x.get("ISIN"),"date":x.get("TradDt"),"close":c,"prev_close":p,"pct":round((c/p-1)*100,2) if p else None,"volume":x.get("TtlTradgVol"),"turnover_cr":round(num(x.get("TtlTrfVal"))/10000000,2)})
+          print("TITAN_TARGETS",json.dumps(sorted(out,key=lambda x:x["ticker"]),separators=(",",":")))
+          with open("titan-targets-27oct.json","w") as f:json.dump(out,f,indent=2)
+          PY
+      - name: Preserve verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-27oct-target-prices
+          path: titan-targets-27oct.json
+          retention-days: 1
