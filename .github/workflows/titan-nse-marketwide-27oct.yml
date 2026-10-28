@@ -1,0 +1,111 @@
+name: TITAN 27 Oct NSE Marketwide RVOL20 and Delivery Screen
+on:
+  push:
+    branches: [titan-nse-rvol20-20261028]
+permissions:
+  contents: read
+jobs:
+  marketwide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Fetch official NSE history and calculate comparable 20-session metrics
+        run: |
+          python - <<'PY'
+          import csv,io,zipfile,json,urllib.request,urllib.error,datetime,collections,statistics,hashlib,time
+          today=datetime.date(2026,10,27)
+          holidays={datetime.date(2026,10,2),datetime.date(2026,10,20)}
+          dates=[today-datetime.timedelta(days=i) for i in range(45)]
+          dates=[d for d in dates if d.weekday()<5 and d not in holidays][:25]
+          hdr={"User-Agent":"TITAN Research historical public market-data reader","Accept":"application/zip,text/csv,*/*"}
+          def get(url):
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,headers=hdr),timeout=20) as r:
+                      return r.read(10000000),r.status
+              except urllib.error.HTTPError as e:return None,e.code
+              except Exception as e:return None,str(e)[:100]
+          def parse(url,zipped):
+              raw,status=get(url)
+              if not raw:return None,status
+              try:
+                  if zipped:
+                      z=zipfile.ZipFile(io.BytesIO(raw));raw=z.read(z.namelist()[0])
+                  rows=list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
+                  return [{k.strip():str(v or "").strip() for k,v in x.items()} for x in rows],status
+              except Exception as e:return None,"PARSE:"+str(e)[:70]
+          def num(x):
+              try:return float(x or 0)
+              except:return 0.
+          udiffs={};deliveries={};status={}
+          for d in dates:
+              stamp=d.strftime("%Y%m%d"); dd=d.strftime("%d%m%Y")
+              u=f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{stamp}_F_0000.csv.zip"
+              rr,s=parse(u,True);status[stamp]={"udiff_http":s,"udiff_rows":len(rr) if rr else 0}
+              if rr and all(x.get("TradDt")==d.isoformat() for x in rr):
+                  udiffs[d]=rr
+              if len(udiffs)>=21:break
+          selected=sorted(udiffs,reverse=True)
+          for d in selected:
+              stamp=d.strftime("%Y%m%d"); dd=d.strftime("%d%m%Y")
+              url=f"https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{dd}.csv"
+              rr,s=parse(url,False);status[stamp].update({"delivery_http":s,"delivery_rows":len(rr) if rr else 0})
+              if rr:deliveries[d]=rr
+          print("TITAN_COVERAGE",json.dumps({"requested_date":"2026-10-27","udiff_sessions":len(udiffs),"delivery_sessions":len(deliveries),"udiff_dates":[d.isoformat() for d in selected],"daily_status":status})[:9000])
+          if today not in udiffs:raise SystemExit("Missing target official UDiFF")
+          def key(x):return x.get("TckrSymb",""),x.get("SctySrs",""),x.get("ISIN","")
+          bydate={}
+          for d,rr in udiffs.items():
+              bydate[d]={key(x):x for x in rr if x.get("FinInstrmTp")=="STK" and x.get("TtlTradgVol") and num(x.get("TtlTradgVol"))>0}
+          deldate={}
+          for d,rr in deliveries.items():
+              deldate[d]={(x.get("SYMBOL"),x.get("SERIES")):x for x in rr}
+          day=bydate[today];hist=[d for d in selected if d<today]
+          screen=[]
+          for k,x in day.items():
+              if x.get("SctySrs") not in ("EQ","BE","BZ","SM","ST"):continue
+              o,h,l,c,p,v=map(lambda f:num(x.get(f)),["OpnPric","HghPric","LwPric","ClsPric","PrvsClsgPric","TtlTradgVol"])
+              if not (p>0 and o>0 and h>=max(o,c) and l<=min(o,c) and l>0 and v>0):continue
+              priors=[bydate[d][k] for d in hist if k in bydate[d]]
+              valid_priors=[z for z in priors if num(z.get("TtlTradgVol"))>0 and num(z.get("HghPric"))>=num(z.get("LwPric"))>0 and num(z.get("ClsPric"))>0]
+              full=len(valid_priors)>=20
+              previous=valid_priors[:20] if full else []
+              avgvol=statistics.mean(num(z["TtlTradgVol"]) for z in previous) if full else None
+              rvol=round(v/avgvol,2) if avgvol and avgvol>0 else None
+              up=full and c>max(num(z["HghPric"]) for z in previous)
+              down=full and c<min(num(z["LwPric"]) for z in previous)
+              dv=deldate.get(today,{}).get((k[0],k[1]))
+              delivqty=num(dv.get("DELIV_QTY")) if dv else None
+              delivpct=num(dv.get("DELIV_PER")) if dv else None
+              delivhist=[num(deldate.get(d,{}).get((k[0],k[1]),{}).get("DELIV_QTY")) for d in hist[:20]]
+              delivvalid=sum(z>0 for z in delivhist)
+              delivery_ratio=round(delivqty/statistics.mean(delivhist),2) if delivqty is not None and delivvalid==20 and statistics.mean(delivhist)>0 else None
+              ma20=statistics.mean([c]+[num(z["ClsPric"]) for z in previous[:19]]) if full else None
+              screen.append({"ticker":k[0],"series":k[1],"isin":k[2],"close":round(c,2),"pct":round((c/p-1)*100,2),"volume":int(v),"turnover_cr":round(num(x.get("TtlTrfVal"))/10000000,2),"rvol20":rvol,"breakout20":bool(up),"breakdown20":bool(down),"ma20_dist_pct":round(100*(c/ma20-1),2) if ma20 else None,"delivery_pct":delivpct,"delivery_ratio20":delivery_ratio,"valid_prior_sessions":len(valid_priors)})
+          def top(sortfn,reverse=True,n=15,flt=lambda x:True):return sorted((x for x in screen if flt(x)),key=sortfn,reverse=reverse)[:n]
+          metrics={
+            "date":"2026-10-27","nse_udiff_rows":len(udiffs[today]),"nse_delivery_rows":len(deliveries.get(today,[])),
+            "valid_ordinary_special_rows":len(screen),"rvol20_valid":sum(x["rvol20"] is not None for x in screen),
+            "delivery_pct_valid":sum(x["delivery_pct"] is not None for x in screen),
+            "delivery_ratio20_valid":sum(x["delivery_ratio20"] is not None for x in screen),
+            "breakout20_count":sum(x["breakout20"] for x in screen),
+            "breakdown20_count":sum(x["breakdown20"] for x in screen),
+            "series":dict(collections.Counter(x["series"] for x in screen)),
+            "top_gainers":top(lambda x:x["pct"],n=20),
+            "top_losers":top(lambda x:x["pct"],reverse=False,n=20),
+            "top_rvol20":top(lambda x:x["rvol20"] or -1,n=20,flt=lambda x:x["rvol20"] is not None),
+            "top_breakout20":top(lambda x:x["pct"],n=12,flt=lambda x:x["breakout20"]),
+            "top_breakdown20":top(lambda x:-x["pct"],n=12,flt=lambda x:x["breakdown20"]),
+            "top_delivery_ratio":top(lambda x:x["delivery_ratio20"] or -1,n=15,flt=lambda x:x["delivery_ratio20"] is not None),
+            "r009_focus":[x for x in screen if x["ticker"] in ("LT","BAJAJ-AUTO","MARUTI","RADICO","CIPLA","MAZDOCK","SONACOMS","MANKIND","TATACONSUM","OLAELEC")],
+          }
+          with open("nse-marketwide-screen-20261027.json","w") as f:json.dump(metrics,f,indent=2)
+          for k,v in metrics.items():
+              print("TITAN_METRIC",k,json.dumps(v,separators=(",",":"))[:17000])
+          PY
+      - name: Preserve summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titan-nse-marketwide-summary-20261027
+          path: nse-marketwide-screen-20261027.json
+          retention-days: 1
