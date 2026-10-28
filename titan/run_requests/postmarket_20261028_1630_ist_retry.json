@@ -1,0 +1,5 @@
+{
+  "purpose": "TITAN Momentum V2.3 postmarket current-day BSE official file",
+  "target_session": "2026-10-28",
+  "note": "Run after 16:30 IST; reject previous-session fallback as current-day evidence"
+}
