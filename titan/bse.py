@@ -123,8 +123,13 @@ def collect(candidates, out):
                     raise RuntimeError('No confirmed report/no-data response; inspect BSE page layout')
                 check()
                 links = page.locator('a[href]')
-                matches = [links.nth(i) for i in range(links.count())
-                           if matching_url(links.nth(i).evaluate('(a) => a.href'), target)]
+                matches_by_url = {}
+                for i in range(links.count()):
+                    link = links.nth(i)
+                    href = link.evaluate('(a) => a.href')
+                    if matching_url(href, target) and link.is_visible():
+                        matches_by_url.setdefault(href, link)
+                matches = list(matches_by_url.values())
                 if not matches:
                     continue
                 if len(matches) != 1:
