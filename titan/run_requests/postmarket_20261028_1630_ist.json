@@ -1,0 +1,6 @@
+{
+  "purpose": "TITAN Momentum V2.3 2026-10-28 post-market BSE CM official UDiFF acquisition",
+  "target_session": "2026-10-28",
+  "request_kind": "append-only trigger for existing bse.yml; validate manifest before accepting",
+  "created_for": "TITAN scheduled post-market review"
+}
