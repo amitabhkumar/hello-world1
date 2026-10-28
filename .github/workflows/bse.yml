@@ -1,0 +1,59 @@
+name: BSE Bhavcopy
+on:
+  push:
+    paths: ['titan/**', 'tests/**', 'requirements-bse.txt', '.github/workflows/bse.yml']
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: 'Optional exact report date YYYY-MM-DD'
+        type: string
+        required: false
+  schedule:
+    # UTC: 08:30 IST weekdays, 16:30 IST weekdays, 22:00 IST daily, 08:00 IST Saturday.
+    - cron: '0 3 * * 1-5'
+    - cron: '0 11 * * 1-5'
+    - cron: '30 16 * * *'
+    - cron: '30 2 * * 6'
+permissions:
+  contents: read
+concurrency:
+  group: bse-bhavcopy-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+  download:
+    if: github.event_name != 'push'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-bse.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Download and validate BSE file
+        env:
+          REPORT_DATE: ${{ inputs.report_date }}
+        shell: bash
+        run: |
+          args=()
+          if [ -n "$REPORT_DATE" ]; then args+=(--date "$REPORT_DATE"); fi
+          xvfb-run --auto-servernum python -m titan.bse "${args[@]}"
+      - name: Preserve result and status for authorized Drive handoff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bse-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 7
