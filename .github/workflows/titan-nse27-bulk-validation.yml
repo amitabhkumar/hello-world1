@@ -1,0 +1,70 @@
+name: TITAN NSE 27 October Official Bulk Validation
+on:
+  push:
+    branches: [titan-nse-20261027-coverage-20261028]
+permissions:
+  contents: read
+jobs:
+  nse-bulk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download official NSE 27 Oct bulk and compute market-wide screen if permitted
+        run: |
+          python - <<'PY'
+          import csv,io,zipfile,json,urllib.request,urllib.error,datetime,collections,statistics,hashlib
+          def fetch(url):
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"TITAN Research / market-data validation","Accept":"text/csv,application/zip,*/*"}),timeout=22) as r:
+                      b=r.read(10000000)
+                      return {"status":r.status,"bytes":len(b),"data":b,"content_type":r.headers.get("Content-Type")}
+              except urllib.error.HTTPError as e:return {"status":e.code,"error":str(e)}
+              except Exception as e:return {"error":str(e)[:220]}
+          base="https://nsearchives.nseindia.com"
+          dt=datetime.date(2026,10,27)
+          urls=[
+            ("udiff",base+"/content/cm/BhavCopy_NSE_CM_0_0_0_20261027_F_0000.csv.zip"),
+            ("delivery",base+"/products/content/sec_bhavdata_full_27102026.csv"),
+            ("legacy",base+"/products/content/sec_bhavdata_full_26102026.csv")]
+          results={}
+          for name,url in urls:
+              r=fetch(url);results[name]={"url":url,"status":r.get("status"),"error":r.get("error"),"bytes":r.get("bytes"),"content_type":r.get("content_type")}
+              if "data" in r:
+                  try:
+                      data=r["data"]
+                      if data[:2]==b"PK":
+                          z=zipfile.ZipFile(io.BytesIO(data));data=z.read(z.namelist()[0]);results[name]["zip_member"]=z.namelist()[0]
+                      text=data.decode("utf-8-sig")
+                      rows=list(csv.DictReader(io.StringIO(text)))
+                      results[name]["columns"]=list(rows[0]) if rows else []
+                      results[name]["rows"]=len(rows)
+                      results[name]["sample"]=rows[0] if rows else {}
+                      results[name]["sha256"]=hashlib.sha256(r["data"]).hexdigest()
+                  except Exception as e:results[name]["parse_error"]=str(e)
+              print("TITAN_SOURCE",name,json.dumps({k:v for k,v in results[name].items() if k!="sample"})[:3000])
+          if results.get("udiff",{}).get("rows",0)>0:
+              rr=results["udiff"];cols=rr["columns"];sample=rr["sample"]
+              print("TITAN_NSE_UDIFF_SAMPLE",json.dumps(sample)[:1600])
+              data=fetch(urls[0][1])
+              raw=data["data"];z=zipfile.ZipFile(io.BytesIO(raw));rows=list(csv.DictReader(io.StringIO(z.read(z.namelist()[0]).decode("utf-8-sig"))))
+              def number(v):
+                  try:return float(v or 0)
+                  except:return 0
+              def key(x):return x.get("TckrSymb",""),x.get("SctySrs",""),x.get("ISIN","")
+              date_fields=collections.Counter((x.get("TradDt") or x.get("BizDt") or "") for x in rows)
+              print("TITAN_UDIFF_DATE_DISTRIBUTION",date_fields.most_common(4))
+              eq=[x for x in rows if x.get("FinInstrmTp","STK")=="STK" and x.get("SctySrs") in ("EQ","BE","BZ","SM","ST")]
+              rank=sorted(eq,key=lambda x:abs(number(x.get("ClsPric"))/number(x.get("PrvsClsgPric"))-1) if number(x.get("PrvsClsgPric")) else -1,reverse=True)
+              print("TITAN_UDIFF_SCREEN",json.dumps({"all_rows":len(rows),"ordinary_and_special_rows":len(eq),"series":dict(collections.Counter(x.get("SctySrs") for x in rows)),"top_20_abs_move":[{"ticker":x.get("TckrSymb"),"series":x.get("SctySrs"),"isin":x.get("ISIN"),"close":x.get("ClsPric"),"prev_close":x.get("PrvsClsgPric"),"volume":x.get("TtlTradgVol"),"pct":round(100*(number(x.get("ClsPric"))/number(x.get("PrvsClsgPric"))-1),2) if number(x.get("PrvsClsgPric")) else None} for x in rank[:20]]})[:9000])
+          else:print("TITAN_UDIFF_UNAVAILABLE_NO_MARKETWIDE_CLAIM")
+          if results.get("delivery",{}).get("rows",0)>0:
+              print("TITAN_DELIVERY_SAMPLE",json.dumps(results["delivery"].get("sample",{}))[:1600])
+          with open("nse27-coverage.json","w") as f:json.dump({k:{a:b for a,b in v.items() if a!="sample"} for k,v in results.items()},f,indent=2)
+          PY
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nse-27-official-coverage-diagnostics
+          path: nse27-coverage.json
+          retention-days: 1
