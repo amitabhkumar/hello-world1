@@ -294,23 +294,26 @@ def adapt(context,page,key,target,dest,responses,result):
   from urllib.parse import parse_qs
   result['deal_types']=[]
   for value,label in [('1','bulk'),('2','block')]:
-   candidates=[r for r in responses if 'BulkDealData_ng/w' in r['url'] and parse_qs(urlparse(r['url']).query).get('DealType')==[value] and r.get('http_status')==200]
-   if not candidates:raise ValueError('Missing dated '+label+' response')
-   r=candidates[-1];obj=safe_json_bytes((dest/r['file']).read_bytes());rows=obj.get('Table')
-   if not isinstance(rows,list):
-    obj,m=browser_json(page,r['url'],dest,label+'_explicit_date');result.setdefault('requests',[]).append(m);rows=obj.get('Table') if isinstance(obj,dict) else None
-   print('DEAL_PAYLOAD '+json.dumps({'type':label,'payload':obj if not rows else {'rows':len(rows),'first':rows[0]}},ensure_ascii=False),flush=True)
-   params=parse_qs(urlparse(r['url']).query);d=date.fromisoformat(target).strftime('%d/%m/%Y')
-   if params.get('FDate')!=[d] or params.get('TDate')!=[d]:raise ValueError('Deal date filter mismatch')
-   if rows in [None,[]] and 'Table' in obj:
-    result['deal_types'].append({'type':label,'status':'EMPTY_RESPONSE','rows':0,'source_url':r['url'],'evidence':r['file'],'meaning':'Official dated endpoint returned no rows; not proof of no institutional activity'})
-    continue
-   require_rows(rows,['DEAL_DATE','SCRIP_CODE','QUANTITY','PRICE'])
-   parsed=[parse_source_date(x['DEAL_DATE']) for x in rows]
-   if any(x!=date.fromisoformat(target) for x in parsed):raise ValueError('Deal record date mismatch')
-   result['exports'].append(export_rows(dest,label+'_deals',rows,['DEAL_DATE','SCRIP_CODE','QUANTITY','PRICE'],r['url'],'Official dated '+label+' deal records; clients and buy/sell side retained without investor-intent inference'))
-   result['deal_types'].append({'type':label,'status':'VALIDATED_DATED_RECORDS','rows':len(rows),'source_url':r['url']})
-  result.update(status='VALIDATED_DATED_RECORDS',coverage='Both deal types requested separately for exact date; empty responses explicitly recorded')
+   try:
+    candidates=[r for r in responses if 'BulkDealData_ng/w' in r['url'] and parse_qs(urlparse(r['url']).query).get('DealType')==[value] and r.get('http_status')==200]
+    if not candidates:raise ValueError('Missing dated '+label+' response')
+    r=candidates[-1];obj=safe_json_bytes((dest/r['file']).read_bytes());rows=obj.get('Table')
+    if not isinstance(rows,list):
+     obj,m=browser_json(page,r['url'],dest,label+'_explicit_date');result.setdefault('requests',[]).append(m);rows=obj.get('Table') if isinstance(obj,dict) else None
+    print('DEAL_PAYLOAD '+json.dumps({'type':label,'payload':obj if not rows else {'rows':len(rows),'first':rows[0]}},ensure_ascii=False),flush=True)
+    params=parse_qs(urlparse(r['url']).query);d=date.fromisoformat(target).strftime('%d/%m/%Y')
+    if params.get('FDate')!=[d] or params.get('TDate')!=[d]:raise ValueError('Deal date filter mismatch')
+    if rows in [None,[]] and 'Table' in obj:
+     result['deal_types'].append({'type':label,'status':'EMPTY_RESPONSE','rows':0,'source_url':r['url'],'evidence':r['file'],'meaning':'Official dated endpoint returned no rows; not proof of no institutional activity'})
+     continue
+    require_rows(rows,['DEAL_DATE','SCRIP_CODE','QUANTITY','PRICE'])
+    parsed=[parse_source_date(x['DEAL_DATE']) for x in rows]
+    if any(x!=date.fromisoformat(target) for x in parsed):raise ValueError('Deal record date mismatch')
+    result['exports'].append(export_rows(dest,label+'_deals',rows,['DEAL_DATE','SCRIP_CODE','QUANTITY','PRICE'],r['url'],'Official dated '+label+' deal records; clients and buy/sell side retained without investor-intent inference'))
+    result['deal_types'].append({'type':label,'status':'VALIDATED_DATED_RECORDS','rows':len(rows),'source_url':r['url']})
+   except Exception as e:
+    result['deal_types'].append({'type':label,'status':'FAILED','error':str(e)})
+  result.update(status='VALIDATED_DATED_RECORDS' if all(x['status'] in ['VALIDATED_DATED_RECORDS','EMPTY_RESPONSE'] for x in result['deal_types']) else 'PARTIAL',coverage='Both deal types requested separately for exact date; failures and schema-confirmed empty responses explicitly recorded')
  elif key=='high_low':
   r,obj=matched(responses,dest,'MktHighLowDataNew/w')
   for table,label,field in [('Table','high','Cur52wkHigh'),('Table1','low','Cur52wkLow')]:
@@ -379,7 +382,10 @@ def adapt(context,page,key,target,dest,responses,result):
   result.update(status='VALIDATED_DATED_RECORDS',coverage='Annual equity holiday table; special-session notice retained separately and exact hours must be confirmed from later circulars')
  elif key=='price_bands':
   result.update(status='PARTIAL',coverage='One-security acquisition probe only (532755). Exchange-wide price-band collection and official effective-date/unit validation remain pending.')
-  for r in relevant:
+  seen_urls=set()
+  for r in reversed(relevant):
+   if r['url'] in seen_urls:continue
+   seen_urls.add(r['url'])
    if 'priceband' in r['url'].lower() or 'priceband' in json.dumps(r.get('arrays',[])).lower():
     obj=safe_json_bytes((dest/r['file']).read_bytes())
     print('PRICE_BAND_PAYLOAD '+json.dumps({'source_url':r['url'],'payload':obj},ensure_ascii=False),flush=True)
