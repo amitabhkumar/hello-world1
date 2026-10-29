@@ -1,0 +1,53 @@
+name: BSE supplementary datasets
+on:
+  push:
+    paths: ['titan/bse_data.py', 'tests/test_bse_data.py', '.github/workflows/bse_data.yml', 'titan/data_run_requests/**']
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: 'Requested report date YYYY-MM-DD; snapshots retain their actual source date'
+        type: string
+        required: false
+      datasets:
+        description: 'all or comma-separated dataset IDs from titan/bse_data.py'
+        type: string
+        default: all
+  schedule:
+    - cron: '0 3 * * 1-5'
+    - cron: '0 11 * * 1-5'
+    - cron: '30 16 * * *'
+    - cron: '30 2 * * 6'
+permissions:
+  contents: read
+concurrency:
+  group: bse-supplementary-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+      - run: pip install -r requirements-bse.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Collect each dataset with explicit status
+        env:
+          REPORT_DATE: ${{ inputs.report_date }}
+          DATASETS: ${{ inputs.datasets }}
+        shell: bash
+        run: |
+          args=(--datasets "${DATASETS:-all}")
+          if [ -n "$REPORT_DATE" ]; then args+=(--date "$REPORT_DATE"); fi
+          xvfb-run --auto-servernum python -m titan.bse_data "${args[@]}"
+      - name: Preserve all successes and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bse-data-${{ github.run_id }}-${{ github.run_attempt }}
+          path: bse_data_output/
+          if-no-files-found: error
+          retention-days: 7
