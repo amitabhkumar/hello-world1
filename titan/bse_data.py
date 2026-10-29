@@ -12,7 +12,7 @@ ROOT='https://www.bseindia.com'
 MAX_BYTES=50_000_000
 SOURCES={
  'announcements':('/corporates/ann.html','Corporate announcements/results/orders'),
- 'delivery':('/markets/equity/EQReports/GrossDel.aspx?flag=0','Gross delivery download; actual page and file scope validated at runtime'),
+ 'delivery':('/markets/equity/EQReports/GrossShortPos?expandable=3&flag=0','Gross delivery download; actual page and file scope validated at runtime'),
  'bulk_block':('/markets/equity/EQReports/BulknBlockDeals.aspx','Bulk and block deals'),
  'corporate_actions':('/corporates/corporate_act.aspx','Corporate actions'),
  'asm':('/markets/equity/EQReports/additional_surveillance_measure.aspx','Additional surveillance measures'),
@@ -20,7 +20,7 @@ SOURCES={
  'shareholding':('/corporates/Sharehold_Searchnew.aspx','Shareholding patterns'),
  'pledges':('/corporates/Pledge_new.aspx','Pledged shares'),
  'calendar':('/static/markets/marketinfo/listholi.aspx','Trading holidays'),
- 'high_low':('/markets/equity/EQReports/ScripwiseHighLow.aspx','52-week high/low'),
+ 'high_low':('/markets/equity/EQReports/HighLow?Flag=H','52-week high/low'),
  'breadth':('/markets/Equity/EQReports/Tradinghighlights_histroical.aspx','Breadth/circuit statistics'),
  'var_margin':('/markets/equity/EQReports/varmargin.aspx?flag=1','VaR margin groups'),
  'regulatory_files':('/members/index.aspx','SCRIP and REG_IND official reference files; ESM/TFT/bands require file validation'),
@@ -142,7 +142,7 @@ def file_candidates(snapshot,objects,key):
      if k.lower() in ['url','filepath','file_path','file_path_csv'] and isinstance(v,str):
       u=urljoin(ROOT+'/',v.replace('\\','/'))
       if official(u) and re.search(r'\.(zip|csv|xlsx?|pdf)$',urlparse(u).path,re.I):urls.append(u)
- return list(dict.fromkeys(urls))
+ return list({u.lower():u for u in reversed(urls)}.values())
 def inspect_download(body,name):
  if body.lstrip().lower().startswith((b'<!doctype html',b'<html')):raise ValueError('HTML returned instead of file')
  if name.lower().endswith('.zip'):
@@ -173,6 +173,9 @@ def download_files(context,dest,urls):
   except Exception as e:errors.append({'url':url,'error':str(e)})
  return files,errors
 
+def decode_reference(body):
+ try:return body.decode('utf-8-sig'),'utf-8-sig'
+ except UnicodeDecodeError:return body.decode('cp1252'),'cp1252 (explicit fallback; original bytes preserved)'
 def extract_reference_files(dest,files):
  import xml.etree.ElementTree as ET
  result=[]
@@ -194,9 +197,9 @@ def extract_reference_files(dest,files):
       snippets=[]
       for m in re.finditer('REG_IND|REG1_IND|ESM|Trade.to.Trade|price band|circuit',txt,re.I):
        snippets.append(txt[max(0,m.start()-200):m.start()+1100])
-      rec['documentation_excerpt']=snippets[:14]
+      rec['documentation_excerpt']=snippets[:14];rec['documentation_text']=txt[:35000]
     else:
-     txt=body.decode('utf-8-sig');delim='|' if txt.splitlines() and '|' in txt.splitlines()[0] else ','
+     txt,encoding=decode_reference(body);rec['encoding']=encoding;delim='|' if txt.splitlines() and '|' in txt.splitlines()[0] else ','
      records=list(csv.reader(io.StringIO(txt),delimiter=delim));rec.update(line_count=len(records),delimiter=delim,first_rows=records[:3])
     result.append(rec)
  print('ARCHIVE_DIAGNOSTIC '+json.dumps(result,ensure_ascii=False),flush=True)
@@ -205,12 +208,6 @@ def extract_reference_files(dest,files):
 def adapt(context,page,key,target,dest,responses,result):
  result['exports']=[]
  if key=='announcements':announcement_pages(page,target,dest,responses,result);return
- if key=='shareholding':
-  page.locator('#AnnouncementDrop').select_option('6');submit(page)
- if key=='corporate_actions':
-  start=date.fromisoformat(target)-timedelta(days=370);end=date.fromisoformat(target)+timedelta(days=30)
-  page.locator('#datepicker_1').fill(start.strftime('%d/%m/%Y'));page.locator('#datepicker_2').fill(end.strftime('%d/%m/%Y'));submit(page)
-  result['requested_action_window']={'from':start.isoformat(),'to':end.isoformat(),'field':'Ex Date'}
  if key=='security_master':
   page.locator('#ddlsegment').select_option('Equity');page.locator('#ddlstatus').select_option(label='Active');submit(page)
  if key in ['delivery','high_low']:
@@ -219,6 +216,7 @@ def adapt(context,page,key,target,dest,responses,result):
   try:submit(page)
   except ValueError:result['form_note']='No visible report Submit; preserve page controls and downloads'
  if key=='bulk_block':
+  if page.locator('#checkId').count():page.locator('#checkId').check()
   result['date_controls_filled']=fill_dates(page,target)
   for value in ['1','2']:
    page.locator('#SelectDeal').select_option(value);submit(page)
@@ -228,6 +226,7 @@ def adapt(context,page,key,target,dest,responses,result):
  result['observed_data_responses']=[{'url':r['url'],'arrays':r.get('arrays',[])} for r in relevant]
  print('ADAPTER_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':[{**x,'options':(x.get('options') or [])[:12]} for x in snap['inputs'] if x.get('id')][-18:],'responses':result['observed_data_responses'],'tables_preview':[t[:3] for t in snap['tables']][:4]},ensure_ascii=False),flush=True)
  contracts={
+  'security_master':('ListofScripData_new/w',['SCRIP_CD','ISIN_NUMBER','Status','Segment'],'Active Equity T+1 securities returned by official all-group endpoint; other statuses and segments excluded'),
   'pledges':('GetCorpPledgeShareholding_ng',['ScripCode','Noofsharespledged'],'All records returned by unfiltered pledge endpoint; mixed reporting periods, not point-in-time reconstruction'),
   'shareholding':('Corp_Shareholding_ng',['FLD_ScripCode','EndDate'],'All industries; last one year of filing metadata requested; underlying ownership tables are linked, not parsed'),
   'corporate_actions':('DefaultData/w',['scrip_code','Ex_date','Purpose'],'All equity actions for requested 370-day history plus 30-day forward Ex Date window; raw actions, not adjustment factors'),
@@ -236,6 +235,13 @@ def adapt(context,page,key,target,dest,responses,result):
  }
  if key in contracts:
   term,keys,scope=contracts[key];r,obj=matched(responses,dest,term);rows=obj.get('Table') if isinstance(obj,dict) else obj
+  if key=='shareholding':
+   obj,m=browser_json(page,query_url(r['url'],flag='6'),dest,'shareholding_one_year');result['requests']=[m];rows=obj.get('Table');r={'url':m['url']}
+  if key=='corporate_actions':
+   start=date.fromisoformat(target)-timedelta(days=370);end=date.fromisoformat(target)+timedelta(days=30)
+   obj,m=browser_json(page,query_url(r['url'],Fdate=start.strftime('%Y%m%d'),TDate=end.strftime('%Y%m%d'),strSearch='S'),dest,'corporate_actions_window')
+   result['requests']=[m];rows=obj.get('Table') if isinstance(obj,dict) else obj;r={'url':m['url']}
+   result['requested_action_window']={'from':start.isoformat(),'to':end.isoformat(),'field':'Ex Date'}
   if key=='breadth':
    d=target.replace('-','');obj,m=browser_json(page,query_url(r['url'],fromdate=d,todate=d),dest,'dated_breadth')
    result['requests']=[m];rows=obj.get('Table');scope='Requested single-date breadth; source DTTM retained'
@@ -263,10 +269,21 @@ def adapt(context,page,key,target,dest,responses,result):
    result.update(status='VALIDATED_DATED_RECORDS' if valid else 'PARTIAL',record_dates_match=valid,coverage='Filename date, security identifier and nonempty records checked for all expected lists')
   if key in ['regulatory_files','var_margin','delivery']:
    result['archive_members']=extract_reference_files(dest,files)
+   if key=='regulatory_files':
+    for member in result['archive_members']:
+     if re.search(r'(REG1?_IND|BSE_EQ_SCRIP|BannedSecurities)',member['member']):
+      text,enc=decode_reference((dest/member['file']).read_bytes())
+      rows=list(csv.DictReader(io.StringIO(text)));keys=['FinInstrmId','ISIN'] if 'BSE_EQ_SCRIP' in member['member'] else ['ScripCode','ESM'] if 'REG' in member['member'] else ['Date','ISIN']
+      result['exports'].append(export_rows(dest,Path(member['file']).stem+'_records',rows,keys,files[0]['source_url'],'Raw dated reference records. Numeric flag codes are not decoded into risk classifications. Mixed security types/statuses retained.'))
+    result['status']='VALIDATED_SNAPSHOT' if result['exports'] else 'PARTIAL'
+    result['coverage']='Downloaded and extracted SCRIP reference archive; per-member dates retained. Raw REG_IND/REG1_IND/UDiFF flags are not an approved restriction interpretation.'
+
 
  elif key=='calendar':
   tables=[t for t in snap['tables'] if len(t)>1]
   result['calendar_tables']=tables
+  write_blob(dest,'holiday_tables.json',json.dumps({'text':snap['text'],'tables':tables},ensure_ascii=False,indent=2).encode())
+  print('CALENDAR_TEXT '+json.dumps(snap['text'][:4000],ensure_ascii=False),flush=True)
   result.update(status='CAPTURED_UNVALIDATED' if tables else 'SOURCE_ONLY',coverage='Rendered holiday tables; segment/year/special-session validation required')
  elif key=='preopen':
   minutes=datetime.now(IST).hour*60+datetime.now(IST).minute
@@ -287,8 +304,17 @@ def collect_one(context,key,target,out):
   if not official(r.url):return
   if r.status in [401,403,429]:blocks.append({'url':r.url,'status':r.status})
   ct=r.headers.get('content-type','').lower()
-  if r.request.method=='GET' and ('json' in ct or 'xml' in ct or 'csv' in ct):
-   rec={'url':r.url,'http_status':r.status,'content_type':ct,'retrieved_at':now()}
+  if key=='bulk_block' and r.request.resource_type=='script':
+   try:
+    js=r.text()
+    found=[]
+    for match in re.finditer('BulkDeal|BlockDeal|BulknBlock',js,re.I):
+     found.append(js[max(0,match.start()-250):match.start()+800])
+    if found:print('SCRIPT_DIAGNOSTIC '+json.dumps({'source_url':r.url,'snippets':found[:22]}),flush=True)
+   except Exception:pass
+
+  if ('json' in ct or 'xml' in ct or 'csv' in ct):
+   rec={'url':r.url,'method':r.request.method,'http_status':r.status,'content_type':ct,'retrieved_at':now()}
    try:
     body=r.body();ext='json' if 'json' in ct else 'xml' if 'xml' in ct else 'csv'
     rec.update(write_blob(dest,f'response_{len(responses):03}.{ext}',body))
@@ -310,7 +336,7 @@ def collect_one(context,key,target,out):
   (dest/'page_snapshot.json').write_text(json.dumps(snapshot,indent=2))
   result['page_title']=snapshot['title'];result['page_http_status']=main.status if main else None
   result['observed_controls']=len(snapshot['inputs']);result['observed_tables']=len(snapshot['tables'])
-  if key in ['high_low','calendar','delivery']:print('SOURCE_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':snapshot['inputs'],'text':snapshot['text'][3000:12000],'links':[x for x in snapshot['links'] if any(w in (x['text']+' '+x['url']).lower() for w in ['gross','deliver','csv','zip','highlow'])]},ensure_ascii=False),flush=True)
+  if key in ['high_low','calendar','delivery']:print('SOURCE_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':snapshot['inputs'],'text':snapshot['text'][:7000],'links':[x for x in snapshot['links'] if any(w in (x['text']+' '+x['url']).lower() for w in ['gross','deliver','csv','zip','highlow','bulk','block'])]},ensure_ascii=False),flush=True)
   if blocks:raise PermissionError('An official endpoint denied access: '+str(blocks))
   adapt(context,page,key,target,dest,responses,result)
  except Exception as e:result.update(status='FAILED',error=f'{type(e).__name__}: {e}')
@@ -321,7 +347,12 @@ def collect_one(context,key,target,out):
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--date');p.add_argument('--datasets',default='all');p.add_argument('--output',type=Path,default=Path('bse_data_output'));args=p.parse_args()
- target=args.date or datetime.now(IST).date().isoformat();date.fromisoformat(target)
+ explicit=args.date
+ if not explicit and os.getenv('GITHUB_EVENT_NAME')=='push' and os.getenv('GITHUB_EVENT_PATH'):
+  event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+  match=re.search(r'\[bse-data-date=(\d{4}-\d{2}-\d{2})\]',(event.get('head_commit') or {}).get('message',''))
+  if match:explicit=match.group(1)
+ target=explicit or datetime.now(IST).date().isoformat();date.fromisoformat(target)
  if date.fromisoformat(target)>datetime.now(IST).date():p.error('Future report date')
  args.output.mkdir(parents=True,exist_ok=True)
  if any(args.output.iterdir()):p.error('Output must be empty; never reuse stale outputs')
