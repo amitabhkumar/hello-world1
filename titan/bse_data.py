@@ -24,7 +24,7 @@ SOURCES={
  'breadth':('/markets/Equity/EQReports/Tradinghighlights_histroical.aspx','Breadth/circuit statistics'),
  'var_margin':('/markets/equity/EQReports/varmargin.aspx?flag=1','VaR margin groups'),
  'regulatory_files':('/members/index.aspx','SCRIP and REG_IND official reference files; ESM/TFT/bands require file validation'),
- 'price_bands':('/static/markets/equity/EQReports/sur_Surveillance.html#!#her3','Price-band notices and surveillance'),
+ 'price_bands':('/stock-share-price/tech-mahindra-ltd/techm/532755/','Per-security price-band source probe (one observed primary-source page; not exchange-wide)'),
  'security_master':('/corporates/List_Scrips.aspx','Listed security master'),
  'preopen':('/static/markets/equity/preopen_session.html','Pre-open source discovery; information page is not live data'),
  'market_quotes':('/markets/Equity/EQReports/MarketWatch.aspx','Market quote source discovery; depth/timestamps require validation'),
@@ -183,7 +183,7 @@ def parse_source_date(value):
  s=str(value).strip()
  try:return datetime.fromisoformat(s.replace('Z','+00:00')).date()
  except ValueError:pass
- for fmt in ['%d/%m/%Y','%d-%b-%Y','%d %b %Y','%d/%m/%y','%d-%b-%y','%Y%m%d']:
+ for fmt in ['%d/%m/%Y','%d-%b-%Y','%d %b %Y','%d/%m/%y','%d-%b-%y','%Y%m%d','%d%m%Y']:
   try:return datetime.strptime(s,fmt).date()
   except ValueError:pass
  raise ValueError('Unrecognized source date: '+s)
@@ -374,6 +374,13 @@ def adapt(context,page,key,target,dest,responses,result):
   result['exports']=[export_rows(dest,'equity_holidays',rows,['date','holiday','weekday'],page.url,t['caption'])]
   result['special_session_notices']=[line for line in snap['text'].splitlines() if 'Muhurat' in line or 'separate circular' in line]
   result.update(status='VALIDATED_DATED_RECORDS',coverage='Annual equity holiday table; special-session notice retained separately and exact hours must be confirmed from later circulars')
+ elif key=='price_bands':
+  result.update(status='PARTIAL',coverage='One-security acquisition probe only (532755). Exchange-wide price-band collection and official effective-date/unit validation remain pending.')
+  for r in relevant:
+   if 'priceband' in r['url'].lower() or 'priceband' in json.dumps(r.get('arrays',[])).lower():
+    obj=safe_json_bytes((dest/r['file']).read_bytes())
+    for i,(p,rows) in enumerate(row_arrays(obj)):
+     result['exports'].append(export_rows(dest,'price_band_probe_%03d'%i,rows,list(rows[0]),r['url'],'Single-security probe: 532755. Values are not approved universe-wide risk filters.'))
  elif key=='preopen':
   minutes=datetime.now(IST).hour*60+datetime.now(IST).minute
   result.update(status='NOT_APPLICABLE' if not 540<=minutes<=555 else 'SOURCE_ONLY',
