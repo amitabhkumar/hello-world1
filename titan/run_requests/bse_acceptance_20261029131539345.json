@@ -1,0 +1,7 @@
+{
+  "purpose": "User-requested BSE bhavcopy live acceptance and scheduled TITAN handoff verification",
+  "requested_at": "2026-10-29T13:15:39.345Z",
+  "expected_report_date": "2026-10-29",
+  "mode": "Documented [bse-live] push; downloader uses current Asia/Kolkata date after16:30",
+  "acceptance": "Validated dated CSV plus independent manifest/hash checks and authorized Drive readback"
+}
