@@ -50,4 +50,4 @@ jobs:
           name: bse-data-${{ github.run_id }}-${{ github.run_attempt }}
           path: bse_data_output/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90

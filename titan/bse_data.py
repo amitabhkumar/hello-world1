@@ -3,7 +3,7 @@ No fingerprint masking, proxy rotation, credential access or challenge bypass.
 A captured page is not a validated dataset. Failures remain separately visible.
 """
 import argparse, csv, hashlib, io, json, os, re, sys, zipfile
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 from zoneinfo import ZoneInfo
@@ -12,7 +12,7 @@ ROOT='https://www.bseindia.com'
 MAX_BYTES=50_000_000
 SOURCES={
  'announcements':('/corporates/ann.html','Corporate announcements/results/orders'),
- 'delivery':('/markets/equity/EQReports/StockPrcHistori.aspx?flag=0','Security price-volume-deliverable history'),
+ 'delivery':('/markets/equity/EQReports/GrossDel.aspx?flag=0','Gross delivery download; actual page and file scope validated at runtime'),
  'bulk_block':('/markets/equity/EQReports/BulknBlockDeals.aspx','Bulk and block deals'),
  'corporate_actions':('/corporates/corporate_act.aspx','Corporate actions'),
  'asm':('/markets/equity/EQReports/additional_surveillance_measure.aspx','Additional surveillance measures'),
@@ -114,21 +114,24 @@ def fill_dates(page,target):
  loc=page.locator('input');filled=[]
  for i in range(loc.count()):
   e=loc.nth(i);ident=e.get_attribute('id') or ''
-  if 'date' in ident.lower() and e.is_visible() and e.get_attribute('type') not in ['checkbox','radio','button','submit']:
+  if ('date' in ident.lower() or ident in ['SelectFromDt','SelectToDt']) and e.is_visible() and e.get_attribute('type') not in ['checkbox','radio','button','submit']:
    try:e.fill(value);e.press('Tab');filled.append(ident)
    except Exception:pass
  return filled
 def submit(page):
- loc=page.locator('input[type=submit],button[type=submit]')
+ # Header controls also declare type=submit; target the report's actual Submit.
+ loc=page.locator("input[value='Submit'],button:has-text('Submit'),#btnSubmit,#ContentPlaceHolder1_btnSubmit")
  for i in range(loc.count()):
   if loc.nth(i).is_visible():loc.nth(i).click();settled(page);return
- raise ValueError('No visible submit control')
+ raise ValueError('No visible report Submit control')
 def file_candidates(snapshot,objects,key):
  from urllib.parse import urljoin
  urls=[]
  for x in snapshot['links']:
   u=x['url'];text=(x['text'] or '').lower();base=urlparse(u).path.lower()
-  if key=='regulatory_files':
+  if key=='delivery':
+   keep=bool(re.search(r'/SCBSEALL.*\.(zip|txt)$',base,re.I))
+  elif key=='regulatory_files':
    keep=bool(re.search(r'/(scrip\.zip|reg_ind[^/]*\.(zip|txt|csv))$',base))
   else:keep=bool(re.search(r'\.(csv|zip|xlsx?|pdf)$',base)) and any(w in (base+' '+text) for w in {'asm':['asm','surveil','short term','long term'],'gsm':['gsm','graded'],'var_margin':['varmargin','var margin']}[key])
   if keep and official(u):urls.append(u)
@@ -169,15 +172,52 @@ def download_files(context,dest,urls):
   except PermissionError as e:errors.append({'url':url,'error':str(e)});break
   except Exception as e:errors.append({'url':url,'error':str(e)})
  return files,errors
+
+def extract_reference_files(dest,files):
+ import xml.etree.ElementTree as ET
+ result=[]
+ for f in files:
+  if f['validation']['format']!='zip':continue
+  with zipfile.ZipFile(dest/f['file']) as z:
+   for item in z.infolist():
+    base=Path(item.filename).name
+    if item.is_dir() or not base.lower().endswith(('.csv','.txt','.docx')):continue
+    body=z.read(item);name=re.sub(r'[^A-Za-z0-9_.-]','_',Path(f['file']).stem+'_'+base)
+    rec=dict(archive=f['file'],member=item.filename,**write_blob(dest,name,body))
+    if base.lower().endswith('.docx'):
+     with zipfile.ZipFile(io.BytesIO(body)) as doc:
+      root=ET.fromstring(doc.read('word/document.xml'));ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+      paras=[''.join(p.itertext()) for p in root.findall('.//w:p',ns)]
+      # Use text nodes only; preserve documentation alongside the raw archive.
+      textparts=[''.join(t.text or '' for t in p.findall('.//w:t',ns)) for p in root.findall('.//w:p',ns)]
+      txt='\n'.join(textparts);write_blob(dest,name+'.txt',txt.encode())
+      snippets=[]
+      for m in re.finditer('REG_IND|REG1_IND|ESM|Trade.to.Trade|price band|circuit',txt,re.I):
+       snippets.append(txt[max(0,m.start()-200):m.start()+1100])
+      rec['documentation_excerpt']=snippets[:14]
+    else:
+     txt=body.decode('utf-8-sig');delim='|' if txt.splitlines() and '|' in txt.splitlines()[0] else ','
+     records=list(csv.reader(io.StringIO(txt),delimiter=delim));rec.update(line_count=len(records),delimiter=delim,first_rows=records[:3])
+    result.append(rec)
+ print('ARCHIVE_DIAGNOSTIC '+json.dumps(result,ensure_ascii=False),flush=True)
+ return result
+
 def adapt(context,page,key,target,dest,responses,result):
  result['exports']=[]
  if key=='announcements':announcement_pages(page,target,dest,responses,result);return
+ if key=='shareholding':
+  page.locator('#AnnouncementDrop').select_option('6');submit(page)
+ if key=='corporate_actions':
+  start=date.fromisoformat(target)-timedelta(days=370);end=date.fromisoformat(target)+timedelta(days=30)
+  page.locator('#datepicker_1').fill(start.strftime('%d/%m/%Y'));page.locator('#datepicker_2').fill(end.strftime('%d/%m/%Y'));submit(page)
+  result['requested_action_window']={'from':start.isoformat(),'to':end.isoformat(),'field':'Ex Date'}
  if key=='security_master':
   page.locator('#ddlsegment').select_option('Equity');page.locator('#ddlstatus').select_option(label='Active');submit(page)
  if key in ['delivery','high_low']:
   if page.locator('#Period').count():page.locator('#Period').select_option('D');settled(page)
   result['date_controls_filled']=fill_dates(page,target)
-  submit(page)
+  try:submit(page)
+  except ValueError:result['form_note']='No visible report Submit; preserve page controls and downloads'
  if key=='bulk_block':
   result['date_controls_filled']=fill_dates(page,target)
   for value in ['1','2']:
@@ -189,8 +229,8 @@ def adapt(context,page,key,target,dest,responses,result):
  print('ADAPTER_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':[{**x,'options':(x.get('options') or [])[:12]} for x in snap['inputs'] if x.get('id')][-18:],'responses':result['observed_data_responses'],'tables_preview':[t[:3] for t in snap['tables']][:4]},ensure_ascii=False),flush=True)
  contracts={
   'pledges':('GetCorpPledgeShareholding_ng',['ScripCode','Noofsharespledged'],'All records returned by unfiltered pledge endpoint; mixed reporting periods, not point-in-time reconstruction'),
-  'shareholding':('Corp_Shareholding_ng',['FLD_ScripCode','EndDate'],'Default recent filings only; not complete market ownership history'),
-  'corporate_actions':('DefaultData/w',['scrip_code','Ex_date','Purpose'],'Default upcoming actions; not complete historical adjustment series'),
+  'shareholding':('Corp_Shareholding_ng',['FLD_ScripCode','EndDate'],'All industries; last one year of filing metadata requested; underlying ownership tables are linked, not parsed'),
+  'corporate_actions':('DefaultData/w',['scrip_code','Ex_date','Purpose'],'All equity actions for requested 370-day history plus 30-day forward Ex Date window; raw actions, not adjustment factors'),
   'breadth':('tradinghighlight/w',['DTTM','Gainer','Loser'],'Source date-window market breadth'),
   'market_quotes':('GetMktData/w',['scrip_cd','FileDTTM','trd_vol'],'AllMkt endpoint snapshot; not order-book depth or same-time intraday history'),
  }
@@ -199,18 +239,31 @@ def adapt(context,page,key,target,dest,responses,result):
   if key=='breadth':
    d=target.replace('-','');obj,m=browser_json(page,query_url(r['url'],fromdate=d,todate=d),dest,'dated_breadth')
    result['requests']=[m];rows=obj.get('Table');scope='Requested single-date breadth; source DTTM retained'
-  result['exports']=[export_rows(dest,key,rows,keys,r['url'],scope)]
+  result['exports']=[export_rows(dest,key,rows,keys,m['url'] if key=='breadth' else r['url'],scope)]
+  if key=='breadth' and not all(str(x['DTTM']).startswith(target) for x in rows):raise ValueError('Breadth date mismatch')
   result.update(status='VALIDATED_SNAPSHOT',coverage=scope,point_in_time_reconstruction=False)
   if key in ['shareholding','corporate_actions']:result['status']='PARTIAL'
- elif key in ['asm','gsm','var_margin','regulatory_files']:
+ elif key in ['asm','gsm','var_margin','regulatory_files','delivery']:
   objects=[]
   for r in relevant:
    if r.get('file','').endswith('.json'):
     objects.append(safe_json_bytes((dest/r['file']).read_bytes()))
   urls=file_candidates(snap,objects,key)
+  if key in ['asm','gsm']:urls=[u for u in urls if '/downloads1/' in u.lower() and 'list_of_' in u.lower() and u.lower().endswith('.csv')]
   result['download_candidates']=urls
   files,errors=download_files(context,dest,urls);result.update(downloads=files,download_errors=errors)
   result.update(status='DOWNLOADED_UNVALIDATED' if files else 'NO_DOWNLOAD_FOUND',coverage='File integrity checked; effective dates and security restriction semantics require validation')
+  if key in ['asm','gsm']:
+   token=date.fromisoformat(target).strftime('%d%m%Y')
+   valid=len(files)==(2 if key=='asm' else 1) and not errors
+   for f in files:
+    rows=list(csv.DictReader(io.StringIO((dest/f['file']).read_text(encoding='utf-8-sig'))))
+    valid=valid and token in f['file'] and bool(rows) and all(re.fullmatch(r'\d{6}',r.get('Scrip Code','').strip()) and r.get('ISIN','').strip() for r in rows)
+    result['exports'].append(export_rows(dest,Path(f['file']).stem+'_records',rows,['Scrip Code','ISIN'],f['source_url'],'Official dated surveillance list; stage definitions retained; no retrospective reconstruction'))
+   result.update(status='VALIDATED_DATED_RECORDS' if valid else 'PARTIAL',record_dates_match=valid,coverage='Filename date, security identifier and nonempty records checked for all expected lists')
+  if key in ['regulatory_files','var_margin','delivery']:
+   result['archive_members']=extract_reference_files(dest,files)
+
  elif key=='calendar':
   tables=[t for t in snap['tables'] if len(t)>1]
   result['calendar_tables']=tables
@@ -257,6 +310,8 @@ def collect_one(context,key,target,out):
   (dest/'page_snapshot.json').write_text(json.dumps(snapshot,indent=2))
   result['page_title']=snapshot['title'];result['page_http_status']=main.status if main else None
   result['observed_controls']=len(snapshot['inputs']);result['observed_tables']=len(snapshot['tables'])
+  if key in ['high_low','calendar','delivery']:print('SOURCE_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':snapshot['inputs'],'text':snapshot['text'][3000:12000],'links':[x for x in snapshot['links'] if any(w in (x['text']+' '+x['url']).lower() for w in ['gross','deliver','csv','zip','highlow'])]},ensure_ascii=False),flush=True)
+  if blocks:raise PermissionError('An official endpoint denied access: '+str(blocks))
   adapt(context,page,key,target,dest,responses,result)
  except Exception as e:result.update(status='FAILED',error=f'{type(e).__name__}: {e}')
  finally:
