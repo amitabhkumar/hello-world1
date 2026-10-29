@@ -16,3 +16,25 @@ class AcquisitionTests(unittest.TestCase):
   self.assertTrue(page_blocked('Please verify you are human'))
   self.assertFalse(page_blocked('Surveillance measures include access rules for some securities'))
 if __name__=='__main__':unittest.main()
+
+
+class ExportContractTests(unittest.TestCase):
+ def test_missing_schema_rejected(self):
+  from titan.bse_data import require_rows
+  with self.assertRaises(ValueError): require_rows([{'count':40}],['ScripCode'])
+ def test_html_download_rejected(self):
+  from titan.bse_data import inspect_download
+  with self.assertRaises(ValueError):inspect_download(b'<html>Error</html>','data.csv')
+ def test_corrupt_archive_rejected(self):
+  from titan.bse_data import inspect_download
+  with self.assertRaises(Exception):inspect_download(b'not a zip','data.zip')
+ def test_query_preserves_empty_filters(self):
+  from titan.bse_data import query_url
+  self.assertEqual(query_url('https://api.bseindia.com/a?scrip=&pageno=1',pageno=2),'https://api.bseindia.com/a?scrip=&pageno=2')
+ def test_export_roundtrip(self):
+  import tempfile
+  from pathlib import Path
+  from titan.bse_data import export_rows
+  with tempfile.TemporaryDirectory() as p:
+   r=export_rows(Path(p),'sample',[{'id':1,'text':'a,b\nc'}],['id'],'https://www.bseindia.com','test')
+   self.assertEqual(r['rows'],1)

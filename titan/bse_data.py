@@ -51,6 +51,181 @@ def write_blob(out,name,body):
 def page_blocked(text):
  # Plain challenge pages, not incidental mentions of access rules in documents.
  return bool(re.search(r'^\s*(access denied|request blocked|forbidden)',text,re.I) or re.search(r'verify (?:that )?you are human|complete the captcha|captcha challenge',text,re.I))
+
+# Dataset adapters. Raw responses remain immutable beside normalized exports.
+def snapshot_page(page):
+ return page.evaluate("""() => ({title:document.title,url:location.href,text:document.body.innerText,inputs:[...document.querySelectorAll('input,select,button')].map(e=>({tag:e.tagName,id:e.id,name:e.name,type:e.type,value:e.value,text:e.innerText,options:e.options?[...e.options].map(x=>({text:x.text,value:x.value})):null})),links:[...document.querySelectorAll('a[href]')].map(a=>({text:a.innerText,url:a.href})),tables:[...document.querySelectorAll('table')].map(t=>[...t.rows].map(r=>[...r.cells].map(c=>c.innerText)))})""")
+def settled(page):
+ page.wait_for_timeout(1200)
+ try:page.wait_for_load_state('networkidle',timeout=8000)
+ except Exception:pass
+def matched(responses,dest,term):
+ found=[r for r in responses if term.lower() in r['url'].lower() and r.get('http_status')==200 and r.get('file','').endswith('.json')]
+ if not found:raise ValueError('Required data response not observed: '+term)
+ r=found[-1];return r,safe_json_bytes((dest/r['file']).read_bytes())
+def require_rows(rows,keys):
+ if not isinstance(rows,list) or not rows:raise ValueError('No records; empty response is not proof of no data')
+ if not all(isinstance(r,dict) and set(keys)<=r.keys() for r in rows):raise ValueError('Required record fields missing: '+str(keys))
+ return rows
+def export_rows(dest,name,rows,keys,source,scope):
+ require_rows(rows,keys)
+ j=write_blob(dest,name+'.json',json.dumps(rows,ensure_ascii=False,indent=2).encode())
+ fields=list(dict.fromkeys(k for r in rows for k in r))
+ buf=io.StringIO(newline='');writer=csv.DictWriter(buf,fieldnames=fields);writer.writeheader();writer.writerows(rows)
+ c=write_blob(dest,name+'.csv',buf.getvalue().encode('utf-8-sig'))
+ # Reopen both generated formats, rather than trusting successful write calls.
+ assert safe_json_bytes((dest/j['file']).read_bytes())==rows
+ assert len(list(csv.DictReader(io.StringIO((dest/c['file']).read_text(encoding='utf-8-sig')))))==len(rows)
+ return dict(rows=len(rows),source_url=source,scope=scope,files=[j,c],required_fields=keys,
+             source_date_fields={k:sorted({str(r.get(k)) for r in rows})[:20] for k in fields if any(w in k.lower() for w in ['date','dttm','dt_tm','time'])})
+def query_url(url,**changes):
+ from urllib.parse import parse_qsl,urlencode,urlunparse
+ p=urlparse(url);q=dict(parse_qsl(p.query,keep_blank_values=True));q.update({k:str(v) for k,v in changes.items()})
+ return urlunparse(p._replace(query=urlencode(q)))
+def browser_json(page,url,dest,name):
+ if not official(url):raise ValueError('Non-official API')
+ x=page.evaluate("""async u => {const r=await fetch(u,{signal:AbortSignal.timeout(30000)}); return {status:r.status,url:r.url,text:await r.text()};}""",url)
+ if x['status'] in [401,403,429]:raise PermissionError('Official API denied access: '+str(x['status']))
+ if x['status']!=200 or not official(x['url']):raise ValueError('Unexpected API response '+str(x['status']))
+ b=x['text'].encode();meta=write_blob(dest,name+'.json',b)
+ return safe_json_bytes(b),dict(url=url,retrieved_at=now(),http_status=x['status'],**meta)
+def announcement_pages(page,target,dest,responses,result):
+ rec,_=matched(responses,dest,'AnnSubCategoryGetData')
+ d=target.replace('-','');url=query_url(rec['url'],pageno=1,strPrevDate=d,strToDate=d)
+ obj,meta=browser_json(page,url,dest,'ann_page_001');result['requests']=[meta]
+ rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
+ expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows);allrows=list(rows)
+ if expected>50000:raise ValueError('Announcement count exceeds explicit safety bound')
+ for n in range(2,(expected+size-1)//size+1):
+  obj,m=browser_json(page,query_url(url,pageno=n),dest,'ann_page_%03d'%n);result['requests'].append(m)
+  allrows.extend(require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT']))
+ # Do not call a moving, offset-paginated feed complete without a stability check.
+ check,m=browser_json(page,url,dest,'ann_page_001_recheck');result['requests'].append(m)
+ ids=[str(x['NEWSID']) for x in allrows]
+ stable=int(check['Table1'][0]['ROWCNT'])==expected and [x['NEWSID'] for x in check['Table']]==[x['NEWSID'] for x in rows]
+ unique=len(ids)==len(set(ids))
+ dates_ok=all(str(x['NEWS_DT']).startswith(target) for x in allrows)
+ result['exports']=[export_rows(dest,'announcements',allrows,['NEWSID','SCRIP_CD','NEWS_DT'],url,'All category corporate announcements for requested calendar date; linked attachments not downloaded')]
+ result.update(expected_rows=expected,pagination_stable=stable,unique_ids=unique,record_dates_match=dates_ok,
+               status='VALIDATED_DATED_RECORDS' if stable and unique and dates_ok and len(allrows)==expected else 'PARTIAL',
+               coverage='API row-count reconciliation; publication/submission timestamps retained; first-public-information still requires issuer research')
+def fill_dates(page,target):
+ value=date.fromisoformat(target).strftime('%d/%m/%Y')
+ loc=page.locator('input');filled=[]
+ for i in range(loc.count()):
+  e=loc.nth(i);ident=e.get_attribute('id') or ''
+  if 'date' in ident.lower() and e.is_visible() and e.get_attribute('type') not in ['checkbox','radio','button','submit']:
+   try:e.fill(value);e.press('Tab');filled.append(ident)
+   except Exception:pass
+ return filled
+def submit(page):
+ loc=page.locator('input[type=submit],button[type=submit]')
+ for i in range(loc.count()):
+  if loc.nth(i).is_visible():loc.nth(i).click();settled(page);return
+ raise ValueError('No visible submit control')
+def file_candidates(snapshot,objects,key):
+ from urllib.parse import urljoin
+ urls=[]
+ for x in snapshot['links']:
+  u=x['url'];text=(x['text'] or '').lower();base=urlparse(u).path.lower()
+  if key=='regulatory_files':
+   keep=bool(re.search(r'/(scrip\.zip|reg_ind[^/]*\.(zip|txt|csv))$',base))
+  else:keep=bool(re.search(r'\.(csv|zip|xlsx?|pdf)$',base)) and any(w in (base+' '+text) for w in {'asm':['asm','surveil','short term','long term'],'gsm':['gsm','graded'],'var_margin':['varmargin','var margin']}[key])
+  if keep and official(u):urls.append(u)
+ for obj in objects:
+  for _,rows in row_arrays(obj):
+   for r in rows:
+    for k,v in r.items():
+     if k.lower() in ['url','filepath','file_path','file_path_csv'] and isinstance(v,str):
+      u=urljoin(ROOT+'/',v.replace('\\','/'))
+      if official(u) and re.search(r'\.(zip|csv|xlsx?|pdf)$',urlparse(u).path,re.I):urls.append(u)
+ return list(dict.fromkeys(urls))
+def inspect_download(body,name):
+ if body.lstrip().lower().startswith((b'<!doctype html',b'<html')):raise ValueError('HTML returned instead of file')
+ if name.lower().endswith('.zip'):
+  with zipfile.ZipFile(io.BytesIO(body)) as z:
+   if sum(i.file_size for i in z.infolist())>MAX_BYTES*4:raise ValueError('Expanded archive too large')
+   bad=z.testzip()
+   if bad:raise ValueError('Bad ZIP CRC: '+bad)
+   return {'format':'zip','members':[{'name':i.filename,'bytes':i.file_size} for i in z.infolist()]}
+ if name.lower().endswith('.csv'):
+  rows=list(csv.reader(io.StringIO(body.decode('utf-8-sig'))))
+  if len(rows)<2:raise ValueError('CSV has no data records')
+  return {'format':'csv','rows_including_header':len(rows),'first_rows':rows[:3]}
+ if name.lower().endswith('.pdf') and body.startswith(b'%PDF'):return {'format':'pdf','semantic_validation':'PENDING'}
+ if name.lower().endswith(('.xls','.xlsx')):return {'format':'spreadsheet','semantic_validation':'PENDING'}
+ raise ValueError('Unsupported or invalid file format')
+def download_files(context,dest,urls):
+ files=[];errors=[]
+ for i,url in enumerate(urls):
+  try:
+   r=context.request.get(url,timeout=30000,max_redirects=0)
+   if r.status in [401,403,429]:raise PermissionError('Access denied '+str(r.status))
+   if r.status!=200:raise ValueError('HTTP '+str(r.status))
+   b=r.body();name='%02d_'%i+re.sub(r'[^A-Za-z0-9_.-]','_',unquote(urlparse(url).path.rsplit('/',1)[-1]))
+   check=inspect_download(b,name);meta=write_blob(dest,name,b)
+   assert fingerprint((dest/name).read_bytes())['sha256']==meta['sha256']
+   files.append(dict(source_url=url,retrieved_at=now(),http_status=r.status,validation=check,**meta))
+  except PermissionError as e:errors.append({'url':url,'error':str(e)});break
+  except Exception as e:errors.append({'url':url,'error':str(e)})
+ return files,errors
+def adapt(context,page,key,target,dest,responses,result):
+ result['exports']=[]
+ if key=='announcements':announcement_pages(page,target,dest,responses,result);return
+ if key=='security_master':
+  page.locator('#ddlsegment').select_option('Equity');page.locator('#ddlstatus').select_option(label='Active');submit(page)
+ if key in ['delivery','high_low']:
+  if page.locator('#Period').count():page.locator('#Period').select_option('D');settled(page)
+  result['date_controls_filled']=fill_dates(page,target)
+  submit(page)
+ if key=='bulk_block':
+  result['date_controls_filled']=fill_dates(page,target)
+  for value in ['1','2']:
+   page.locator('#SelectDeal').select_option(value);submit(page)
+ # Diagnose unknown adapters from the actually rendered controls and responses.
+ snap=snapshot_page(page);(dest/'page_snapshot_after.json').write_text(json.dumps(snap,indent=2))
+ relevant=[r for r in responses if not any(t in r['url'] for t in ['appConfig','Mkt_GetTicker','GetSensexDatanew','GetINDUSTRYWATCHLIST'])]
+ result['observed_data_responses']=[{'url':r['url'],'arrays':r.get('arrays',[])} for r in relevant]
+ print('ADAPTER_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':[{**x,'options':(x.get('options') or [])[:12]} for x in snap['inputs'] if x.get('id')][-18:],'responses':result['observed_data_responses'],'tables_preview':[t[:3] for t in snap['tables']][:4]},ensure_ascii=False),flush=True)
+ contracts={
+  'pledges':('GetCorpPledgeShareholding_ng',['ScripCode','Noofsharespledged'],'All records returned by unfiltered pledge endpoint; mixed reporting periods, not point-in-time reconstruction'),
+  'shareholding':('Corp_Shareholding_ng',['FLD_ScripCode','EndDate'],'Default recent filings only; not complete market ownership history'),
+  'corporate_actions':('DefaultData/w',['scrip_code','Ex_date','Purpose'],'Default upcoming actions; not complete historical adjustment series'),
+  'breadth':('tradinghighlight/w',['DTTM','Gainer','Loser'],'Source date-window market breadth'),
+  'market_quotes':('GetMktData/w',['scrip_cd','FileDTTM','trd_vol'],'AllMkt endpoint snapshot; not order-book depth or same-time intraday history'),
+ }
+ if key in contracts:
+  term,keys,scope=contracts[key];r,obj=matched(responses,dest,term);rows=obj.get('Table') if isinstance(obj,dict) else obj
+  if key=='breadth':
+   d=target.replace('-','');obj,m=browser_json(page,query_url(r['url'],fromdate=d,todate=d),dest,'dated_breadth')
+   result['requests']=[m];rows=obj.get('Table');scope='Requested single-date breadth; source DTTM retained'
+  result['exports']=[export_rows(dest,key,rows,keys,r['url'],scope)]
+  result.update(status='VALIDATED_SNAPSHOT',coverage=scope,point_in_time_reconstruction=False)
+  if key in ['shareholding','corporate_actions']:result['status']='PARTIAL'
+ elif key in ['asm','gsm','var_margin','regulatory_files']:
+  objects=[]
+  for r in relevant:
+   if r.get('file','').endswith('.json'):
+    objects.append(safe_json_bytes((dest/r['file']).read_bytes()))
+  urls=file_candidates(snap,objects,key)
+  result['download_candidates']=urls
+  files,errors=download_files(context,dest,urls);result.update(downloads=files,download_errors=errors)
+  result.update(status='DOWNLOADED_UNVALIDATED' if files else 'NO_DOWNLOAD_FOUND',coverage='File integrity checked; effective dates and security restriction semantics require validation')
+ elif key=='calendar':
+  tables=[t for t in snap['tables'] if len(t)>1]
+  result['calendar_tables']=tables
+  result.update(status='CAPTURED_UNVALIDATED' if tables else 'SOURCE_ONLY',coverage='Rendered holiday tables; segment/year/special-session validation required')
+ elif key=='preopen':
+  minutes=datetime.now(IST).hour*60+datetime.now(IST).minute
+  result.update(status='NOT_APPLICABLE' if not 540<=minutes<=555 else 'SOURCE_ONLY',
+    coverage='Information page only; no live auction feed configured. Requires actual pre-open session validation; indicative orders are not trades',
+    future_trigger='Trading day 09:00-09:15 Asia/Kolkata')
+ else:
+  # Keep useful raw responses but never interpret dropdown lists as market records.
+  result.update(status='CAPTURED_UNVALIDATED' if relevant else 'SOURCE_ONLY',
+                coverage='Adapter still requires endpoint-specific schema, date and coverage validation')
+ result['diagnostic_links']=[x for x in snap['links'] if re.search(r'\.(zip|csv|xlsx?|pdf)(?:\?|$)',x['url'],re.I)]
+
 def collect_one(context,key,target,out):
  path,label=SOURCES[key];dest=out/key;dest.mkdir();responses=[];blocks=[];errors=[]
  result={'dataset':key,'description':label,'requested_report_date':target,'started_at':now(),'source_url':ROOT+path,'status':'STARTED','coverage':'UNVERIFIED','drive_status':'NOT_TRANSFERRED'}
@@ -82,9 +257,7 @@ def collect_one(context,key,target,out):
   (dest/'page_snapshot.json').write_text(json.dumps(snapshot,indent=2))
   result['page_title']=snapshot['title'];result['page_http_status']=main.status if main else None
   result['observed_controls']=len(snapshot['inputs']);result['observed_tables']=len(snapshot['tables'])
-  # An API capture may be useful but is not silently promoted to validated coverage.
-  captured=any(r.get('arrays') for r in responses)
-  result.update(status='CAPTURED_UNVALIDATED' if captured else 'PAGE_ONLY',coverage='Page defaults/first response only; date, scope, pagination and export semantics need dataset adapter')
+  adapt(context,page,key,target,dest,responses,result)
  except Exception as e:result.update(status='FAILED',error=f'{type(e).__name__}: {e}')
  finally:
   result.update(finished_at=now(),responses=responses,access_errors=blocks)
@@ -112,11 +285,11 @@ def main():
    else:
     home.close()
     for n in names:
-     x=collect_one(context,n,target,args.output);results.append(x);print(n,x['status'],flush=True)
+     x=collect_one(context,n,target,args.output);results.append(x);print('DATASET_RESULT '+json.dumps({k:v for k,v in x.items() if k not in ['responses','observed_data_responses','calendar_tables','diagnostic_links']},ensure_ascii=False),flush=True)
   except Exception as e:
    seen={x['dataset'] for x in results};results += [{'dataset':n,'status':'FAILED','error':str(e)} for n in names if n not in seen]
   finally:browser.close()
- status='COMPLETE' if results and all(x['status']=='VALIDATED_DOWNLOAD' for x in results) else 'PARTIAL'
+ status='COMPLETE' if results and all(x['status'] in ['VALIDATED_DATED_RECORDS','VALIDATED_SNAPSHOT','VALIDATED_DOWNLOAD','NOT_APPLICABLE'] for x in results) else 'PARTIAL'
  manifest={'schema_version':1,'started_at':started,'finished_at':now(),'requested_report_date':target,'mode':'Public BSE source acquisition; page captures are explicitly unvalidated','status':status,'github_run_id':os.getenv('GITHUB_RUN_ID'),'github_run_attempt':os.getenv('GITHUB_RUN_ATTEMPT'),'commit':os.getenv('GITHUB_SHA'),'datasets':results,'drive_status':'NOT_TRANSFERRED'}
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
  return 0 if status=='COMPLETE' else 2
