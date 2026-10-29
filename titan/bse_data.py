@@ -89,7 +89,7 @@ def query_url(url,**changes):
  return urlunparse(p._replace(query=urlencode(q)))
 def browser_json(page,url,dest,name):
  if not official(url):raise ValueError('Non-official API')
- x=page.evaluate("""async u => {const r=await fetch(u,{signal:AbortSignal.timeout(30000)}); return {status:r.status,url:r.url,text:await r.text()};}""",url)
+ x=page.evaluate("""async u => {const r=await fetch(u,{signal:AbortSignal.timeout(90000)}); return {status:r.status,url:r.url,text:await r.text()};}""",url)
  if x['status'] in [401,403,429]:raise PermissionError('Official API denied access: '+str(x['status']))
  if x['status']!=200 or not official(x['url']):raise ValueError('Unexpected API response '+str(x['status']))
  b=x['text'].encode();meta=write_blob(dest,name+'.json',b)
@@ -297,6 +297,9 @@ def adapt(context,page,key,target,dest,responses,result):
    candidates=[r for r in responses if 'BulkDealData_ng/w' in r['url'] and parse_qs(urlparse(r['url']).query).get('DealType')==[value] and r.get('http_status')==200]
    if not candidates:raise ValueError('Missing dated '+label+' response')
    r=candidates[-1];obj=safe_json_bytes((dest/r['file']).read_bytes());rows=obj.get('Table')
+   if not isinstance(rows,list):
+    obj,m=browser_json(page,r['url'],dest,label+'_explicit_date');result.setdefault('requests',[]).append(m);rows=obj.get('Table') if isinstance(obj,dict) else None
+   print('DEAL_PAYLOAD '+json.dumps({'type':label,'payload':obj if not rows else {'rows':len(rows),'first':rows[0]}},ensure_ascii=False),flush=True)
    params=parse_qs(urlparse(r['url']).query);d=date.fromisoformat(target).strftime('%d/%m/%Y')
    if params.get('FDate')!=[d] or params.get('TDate')!=[d]:raise ValueError('Deal date filter mismatch')
    if rows in [None,[]] and 'Table' in obj:
@@ -379,7 +382,10 @@ def adapt(context,page,key,target,dest,responses,result):
   for r in relevant:
    if 'priceband' in r['url'].lower() or 'priceband' in json.dumps(r.get('arrays',[])).lower():
     obj=safe_json_bytes((dest/r['file']).read_bytes())
-    for i,(p,rows) in enumerate(row_arrays(obj)):
+    print('PRICE_BAND_PAYLOAD '+json.dumps({'source_url':r['url'],'payload':obj},ensure_ascii=False),flush=True)
+    arrays=row_arrays(obj)
+    if not arrays and isinstance(obj,dict) and any(k in obj for k in ['UpperT','LowerT','PBpcLC']):arrays=[('$',[obj])]
+    for i,(p,rows) in enumerate(arrays):
      result['exports'].append(export_rows(dest,'price_band_probe_%03d'%i,rows,list(rows[0]),r['url'],'Single-security probe: 532755. Values are not approved universe-wide risk filters.'))
  elif key=='preopen':
   minutes=datetime.now(IST).hour*60+datetime.now(IST).minute
@@ -444,7 +450,12 @@ def main():
  if date.fromisoformat(target)>datetime.now(IST).date():p.error('Future report date')
  args.output.mkdir(parents=True,exist_ok=True)
  if any(args.output.iterdir()):p.error('Output must be empty; never reuse stale outputs')
- names=list(SOURCES) if args.datasets=='all' else args.datasets.split(',')
+ dataset_selection=args.datasets
+ if dataset_selection=='all' and os.getenv('GITHUB_EVENT_NAME')=='push' and os.getenv('GITHUB_EVENT_PATH'):
+  event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+  m=re.search(r'\[bse-data-sets=([a-z_,]+)\]',(event.get('head_commit') or {}).get('message',''))
+  if m:dataset_selection=m.group(1)
+ names=list(SOURCES) if dataset_selection=='all' else dataset_selection.split(',')
  if not set(names)<=set(SOURCES):p.error('Unknown dataset')
  started=now();results=[]
  from playwright.sync_api import sync_playwright
