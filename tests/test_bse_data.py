@@ -38,3 +38,27 @@ class ExportContractTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as p:
    r=export_rows(Path(p),'sample',[{'id':1,'text':'a,b\nc'}],['id'],'https://www.bseindia.com','test')
    self.assertEqual(r['rows'],1)
+
+class DataQualityTests(unittest.TestCase):
+ def test_delivery_wrong_date_and_bad_percentage(self):
+  from titan.bse_data import validate_delivery
+  row={'DATE':'29102026','SCRIP CODE':'500002','DELIVERY QTY':'50',"DAY'S VOLUME":'100','DELV. PER.':'50.00'}
+  validate_delivery([row],'2026-10-29')
+  with self.assertRaises(ValueError):validate_delivery([row],'2026-10-28')
+  with self.assertRaises(ValueError):validate_delivery([{**row,'DELV. PER.':'60'}],'2026-10-29')
+  with self.assertRaises(ValueError):validate_delivery([row,row],'2026-10-29')
+ def test_chunked_export_preserves_all_rows(self):
+  import tempfile,json
+  from pathlib import Path
+  from titan.bse_data import export_rows
+  rows=[{'id':i} for i in range(5001)]
+  with tempfile.TemporaryDirectory() as p:
+   r=export_rows(Path(p),'sample',rows,['id'],'https://www.bseindia.com','test')
+   parts=[f for f in r['files'] if f['file'].endswith('.json')]
+   self.assertEqual(len(parts),2)
+   actual=[x for f in parts for x in json.loads((Path(p)/f['file']).read_text())]
+   self.assertEqual(rows,actual)
+ def test_cp1252_is_explicit(self):
+  from titan.bse_data import decode_reference
+  text,enc=decode_reference(b'Company\xa0Name')
+  self.assertIn('cp1252',enc);self.assertIn('Name',text)

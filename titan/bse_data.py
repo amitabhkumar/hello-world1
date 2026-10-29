@@ -68,16 +68,21 @@ def require_rows(rows,keys):
  if not all(isinstance(r,dict) and set(keys)<=r.keys() for r in rows):raise ValueError('Required record fields missing: '+str(keys))
  return rows
 def export_rows(dest,name,rows,keys,source,scope):
- require_rows(rows,keys)
- j=write_blob(dest,name+'.json',json.dumps(rows,ensure_ascii=False,indent=2).encode())
+ require_rows(rows,keys);files=[]
+ # Partition large normalized JSON without dropping records or changing raw inputs.
+ for offset in range(0,len(rows),5000):
+  part=rows[offset:offset+5000];suffix='' if len(rows)<=5000 else '_part%03d'%(offset//5000+1)
+  j=write_blob(dest,name+suffix+'.json',json.dumps(part,ensure_ascii=False,separators=(',',':')).encode())
+  assert safe_json_bytes((dest/j['file']).read_bytes())==part
+  files.append(dict(j,first_row=offset+1,last_row=offset+len(part)))
  fields=list(dict.fromkeys(k for r in rows for k in r))
  buf=io.StringIO(newline='');writer=csv.DictWriter(buf,fieldnames=fields);writer.writeheader();writer.writerows(rows)
- c=write_blob(dest,name+'.csv',buf.getvalue().encode('utf-8-sig'))
- # Reopen both generated formats, rather than trusting successful write calls.
- assert safe_json_bytes((dest/j['file']).read_bytes())==rows
- assert len(list(csv.DictReader(io.StringIO((dest/c['file']).read_text(encoding='utf-8-sig')))))==len(rows)
- return dict(rows=len(rows),source_url=source,scope=scope,files=[j,c],required_fields=keys,
-             source_date_fields={k:sorted({str(r.get(k)) for r in rows})[:20] for k in fields if any(w in k.lower() for w in ['date','dttm','dt_tm','time'])})
+ cf=write_blob(dest,name+'.csv',buf.getvalue().encode('utf-8-sig'));files.append(cf)
+ assert len(list(csv.DictReader(io.StringIO((dest/cf['file']).read_text(encoding='utf-8-sig')))))==len(rows)
+ dates={k:sorted({str(r.get(k)) for r in rows}) for k in fields if any(w in k.lower() for w in ['date','dttm','dt_tm','time'])}
+ return dict(rows=len(rows),source_url=source,scope=scope,files=files,required_fields=keys,
+             source_date_fields={k:values[:20] for k,values in dates.items()},
+             source_date_values_truncated={k:len(values)>20 for k,values in dates.items()})
 def query_url(url,**changes):
  from urllib.parse import parse_qsl,urlencode,urlunparse
  p=urlparse(url);q=dict(parse_qsl(p.query,keep_blank_values=True));q.update({k:str(v) for k,v in changes.items()})
@@ -173,6 +178,28 @@ def download_files(context,dest,urls):
   except Exception as e:errors.append({'url':url,'error':str(e)})
  return files,errors
 
+
+def parse_source_date(value):
+ s=str(value).strip()
+ try:return datetime.fromisoformat(s.replace('Z','+00:00')).date()
+ except ValueError:pass
+ for fmt in ['%d/%m/%Y','%d-%b-%Y','%d %b %Y','%d/%m/%y','%d-%b-%y','%Y%m%d']:
+  try:return datetime.strptime(s,fmt).date()
+  except ValueError:pass
+ raise ValueError('Unrecognized source date: '+s)
+def validate_delivery(rows,target):
+ from decimal import Decimal
+ require_rows(rows,['DATE','SCRIP CODE','DELIVERY QTY',"DAY'S VOLUME",'DELV. PER.'])
+ seen=set()
+ for r in rows:
+  if parse_source_date(r['DATE'])!=date.fromisoformat(target):raise ValueError('Delivery record date mismatch')
+  code=r['SCRIP CODE'].strip()
+  if code in seen or not re.fullmatch(r'\d{6}',code):raise ValueError('Invalid/duplicate delivery code')
+  seen.add(code);qty=int(r['DELIVERY QTY']);volume=int(r["DAY'S VOLUME"]);pct=Decimal(r['DELV. PER.'])
+  if qty<0 or volume<0 or qty>volume or not pct.is_finite() or not 0<=pct<=100:raise ValueError('Invalid delivery quantities/percentage')
+  if volume and abs(Decimal(qty)*100/Decimal(volume)-pct)>Decimal('0.011'):raise ValueError('Delivery percentage arithmetic mismatch')
+  if volume==0 and (qty!=0 or pct!=0):raise ValueError('Nonzero delivery with zero volume')
+
 def decode_reference(body):
  try:return body.decode('utf-8-sig'),'utf-8-sig'
  except UnicodeDecodeError:return body.decode('cp1252'),'cp1252 (explicit fallback; original bytes preserved)'
@@ -234,7 +261,16 @@ def adapt(context,page,key,target,dest,responses,result):
   'market_quotes':('GetMktData/w',['scrip_cd','FileDTTM','trd_vol'],'AllMkt endpoint snapshot; not order-book depth or same-time intraday history'),
  }
  if key in contracts:
-  term,keys,scope=contracts[key];r,obj=matched(responses,dest,term);rows=obj.get('Table') if isinstance(obj,dict) else obj
+  term,keys,scope=contracts[key]
+  try:r,obj=matched(responses,dest,term)
+  except ValueError:
+   known={
+    'pledges':'https://api.bseindia.com/BseIndiaAPI/api/GetCorpPledgeShareholding_ng/w?COMPANY=&Group=&Status=&Industryname=&PledgeRange=&DeriTrade=',
+    'security_master':'https://api.bseindia.com/BseIndiaAPI/api/ListofScripData_new/w?Group=&Scripcode=&segment=Equity&status=Active&scripName='
+   }
+   if key not in known or result.get('access_errors'):raise
+   obj,m=browser_json(page,known[key],dest,'explicit_'+key);result['requests']=[m];r={'url':m['url']}
+  rows=obj.get('Table') if isinstance(obj,dict) else obj
   if key=='shareholding':
    obj,m=browser_json(page,query_url(r['url'],flag='6'),dest,'shareholding_one_year');result['requests']=[m];rows=obj.get('Table');r={'url':m['url']}
   if key=='corporate_actions':
@@ -248,13 +284,43 @@ def adapt(context,page,key,target,dest,responses,result):
   result['exports']=[export_rows(dest,key,rows,keys,m['url'] if key=='breadth' else r['url'],scope)]
   if key=='breadth' and not all(str(x['DTTM']).startswith(target) for x in rows):raise ValueError('Breadth date mismatch')
   result.update(status='VALIDATED_SNAPSHOT',coverage=scope,point_in_time_reconstruction=False)
-  if key in ['shareholding','corporate_actions']:result['status']='PARTIAL'
+  if key=='shareholding':result['status']='PARTIAL'
+  if key=='corporate_actions':
+   dates=[datetime.strptime(str(x['exdate']),'%Y%m%d').date() for x in rows]
+   ok=all(start<=d<=end for d in dates)
+   result.update(status='VALIDATED_DATED_RECORDS' if ok else 'PARTIAL',window_dates_match=ok,observed_ex_date_min=min(dates).isoformat(),observed_ex_date_max=max(dates).isoformat())
+  if key=='breadth':result['status']='VALIDATED_DATED_RECORDS'
+ elif key=='bulk_block':
+  from urllib.parse import parse_qs
+  result['deal_types']=[]
+  for value,label in [('1','bulk'),('2','block')]:
+   candidates=[r for r in responses if 'BulkDealData_ng/w' in r['url'] and parse_qs(urlparse(r['url']).query).get('DealType')==[value] and r.get('http_status')==200]
+   if not candidates:raise ValueError('Missing dated '+label+' response')
+   r=candidates[-1];obj=safe_json_bytes((dest/r['file']).read_bytes());rows=obj.get('Table')
+   params=parse_qs(urlparse(r['url']).query);d=date.fromisoformat(target).strftime('%d/%m/%Y')
+   if params.get('FDate')!=[d] or params.get('TDate')!=[d]:raise ValueError('Deal date filter mismatch')
+   if rows in [None,[]] and 'Table' in obj:
+    result['deal_types'].append({'type':label,'status':'EMPTY_RESPONSE','rows':0,'source_url':r['url'],'evidence':r['file'],'meaning':'Official dated endpoint returned no rows; not proof of no institutional activity'})
+    continue
+   require_rows(rows,['DEAL_DATE','SCRIP_CODE','QUANTITY','PRICE'])
+   parsed=[parse_source_date(x['DEAL_DATE']) for x in rows]
+   if any(x!=date.fromisoformat(target) for x in parsed):raise ValueError('Deal record date mismatch')
+   result['exports'].append(export_rows(dest,label+'_deals',rows,['DEAL_DATE','SCRIP_CODE','QUANTITY','PRICE'],r['url'],'Official dated '+label+' deal records; clients and buy/sell side retained without investor-intent inference'))
+   result['deal_types'].append({'type':label,'status':'VALIDATED_DATED_RECORDS','rows':len(rows),'source_url':r['url']})
+  result.update(status='VALIDATED_DATED_RECORDS',coverage='Both deal types requested separately for exact date; empty responses explicitly recorded')
+ elif key=='high_low':
+  r,obj=matched(responses,dest,'MktHighLowDataNew/w')
+  for table,label,field in [('Table','high','Cur52wkHigh'),('Table1','low','Cur52wkLow')]:
+   rows=require_rows(obj.get(table),['SCRIP_CD',field,'dt_tm'])
+   result['exports'].append(export_rows(dest,'52_week_'+label,rows,['SCRIP_CD',field,'dt_tm'],r['url'],'All returned current 52-week '+label+' events; timestamps retained, not a historical adjusted-price reconstruction'))
+  result.update(status='VALIDATED_SNAPSHOT',coverage='Both high and low arrays, all returned groups; may include non-ordinary instruments')
  elif key in ['asm','gsm','var_margin','regulatory_files','delivery']:
   objects=[]
   for r in relevant:
    if r.get('file','').endswith('.json'):
     objects.append(safe_json_bytes((dest/r['file']).read_bytes()))
   urls=file_candidates(snap,objects,key)
+  if key=='delivery':urls=[u for u in urls if urlparse(u).hostname=='www.bseindia.com']
   if key in ['asm','gsm']:urls=[u for u in urls if '/downloads1/' in u.lower() and 'list_of_' in u.lower() and u.lower().endswith('.csv')]
   result['download_candidates']=urls
   files,errors=download_files(context,dest,urls);result.update(downloads=files,download_errors=errors)
@@ -269,6 +335,21 @@ def adapt(context,page,key,target,dest,responses,result):
    result.update(status='VALIDATED_DATED_RECORDS' if valid else 'PARTIAL',record_dates_match=valid,coverage='Filename date, security identifier and nonempty records checked for all expected lists')
   if key in ['regulatory_files','var_margin','delivery']:
    result['archive_members']=extract_reference_files(dest,files)
+   if key=='delivery':
+    for member in result['archive_members']:
+     if not re.fullmatch(r'SCBSEALL\d{4}\.TXT',Path(member['member']).name,re.I):continue
+     text,enc=decode_reference((dest/member['file']).read_bytes())
+     rows=list(csv.DictReader(io.StringIO(text),delimiter='|'))
+     validate_delivery(rows,target)
+     result['exports'].append(export_rows(dest,'delivery',rows,['DATE','SCRIP CODE','DELIVERY QTY',"DAY'S VOLUME",'DELV. PER.'],files[0]['source_url'],'Exact-date delivery report. Quantity fields: shares; published percentage: percent. Value/turnover fields retained as published; units not silently converted.'))
+    result.update(status='VALIDATED_DATED_RECORDS' if result['exports'] else 'PARTIAL',coverage='All records in downloaded daily delivery file; unique codes, dates, nonnegative quantities, delivery<=volume and reported percentage checked')
+   if key=='var_margin':
+    for member in result['archive_members']:
+     if not re.fullmatch(r'gr[12]_\d{8}\.csv',Path(member['member']).name,re.I):continue
+     text,enc=decode_reference((dest/member['file']).read_bytes());rows=list(csv.DictReader(io.StringIO(text)))
+     keyfield='Scrip Code' if 'Scrip Code' in rows[0] else 'SCRIP_CODE'
+     result['exports'].append(export_rows(dest,Path(member['file']).stem+'_records',rows,[keyfield,'ISIN'],files[0]['source_url'],'Published VaR grouping file, not numerical VaR rates. File period/member date retained; do not apply to earlier sessions.'))
+    result.update(status='VALIDATED_SNAPSHOT' if result['exports'] else 'PARTIAL',coverage='Published next-period groups. Member filename date may be future-effective; raw as-of snapshot only.')
    if key=='regulatory_files':
     for member in result['archive_members']:
      if re.search(r'(REG1?_IND|BSE_EQ_SCRIP|BannedSecurities)',member['member']):
@@ -280,11 +361,19 @@ def adapt(context,page,key,target,dest,responses,result):
 
 
  elif key=='calendar':
-  tables=[t for t in snap['tables'] if len(t)>1]
-  result['calendar_tables']=tables
+  tables=page.locator('table').evaluate_all("""ts=>ts.map(t=>({caption:t.caption?.innerText||'',rows:[...t.rows].map(r=>[...r.cells].map(c=>c.innerText))}))""")
   write_blob(dest,'holiday_tables.json',json.dumps({'text':snap['text'],'tables':tables},ensure_ascii=False,indent=2).encode())
-  print('CALENDAR_TEXT '+json.dumps(snap['text'][:4000],ensure_ascii=False),flush=True)
-  result.update(status='CAPTURED_UNVALIDATED' if tables else 'SOURCE_ONLY',coverage='Rendered holiday tables; segment/year/special-session validation required')
+  chosen=[t for t in tables if 'Equity Segment' in t['caption'] and 'Currency' not in t['caption']]
+  if len(chosen)!=1:raise ValueError('Cannot uniquely identify equity holiday table by caption')
+  t=chosen[0];rows=[]
+  for row in t['rows'][1:]:
+   if len(row)!=4:raise ValueError('Holiday row shape changed')
+   d=datetime.strptime(row[2],'%d-%b-%y').date()
+   if d.year!=date.fromisoformat(target).year or d.strftime('%A')!=row[3]:raise ValueError('Holiday year/weekday mismatch')
+   rows.append({'date':d.isoformat(),'holiday':row[1],'weekday':row[3],'segment':'Equity and Equity Derivatives'})
+  result['exports']=[export_rows(dest,'equity_holidays',rows,['date','holiday','weekday'],page.url,t['caption'])]
+  result['special_session_notices']=[line for line in snap['text'].splitlines() if 'Muhurat' in line or 'separate circular' in line]
+  result.update(status='VALIDATED_DATED_RECORDS',coverage='Annual equity holiday table; special-session notice retained separately and exact hours must be confirmed from later circulars')
  elif key=='preopen':
   minutes=datetime.now(IST).hour*60+datetime.now(IST).minute
   result.update(status='NOT_APPLICABLE' if not 540<=minutes<=555 else 'SOURCE_ONLY',
@@ -304,15 +393,6 @@ def collect_one(context,key,target,out):
   if not official(r.url):return
   if r.status in [401,403,429]:blocks.append({'url':r.url,'status':r.status})
   ct=r.headers.get('content-type','').lower()
-  if key=='bulk_block' and r.request.resource_type=='script':
-   try:
-    js=r.text()
-    found=[]
-    for match in re.finditer('BulkDeal|BlockDeal|BulknBlock',js,re.I):
-     found.append(js[max(0,match.start()-250):match.start()+800])
-    if found:print('SCRIPT_DIAGNOSTIC '+json.dumps({'source_url':r.url,'snippets':found[:22]}),flush=True)
-   except Exception:pass
-
   if ('json' in ct or 'xml' in ct or 'csv' in ct):
    rec={'url':r.url,'method':r.request.method,'http_status':r.status,'content_type':ct,'retrieved_at':now()}
    try:
@@ -337,6 +417,7 @@ def collect_one(context,key,target,out):
   result['page_title']=snapshot['title'];result['page_http_status']=main.status if main else None
   result['observed_controls']=len(snapshot['inputs']);result['observed_tables']=len(snapshot['tables'])
   if key in ['high_low','calendar','delivery']:print('SOURCE_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':snapshot['inputs'],'text':snapshot['text'][:7000],'links':[x for x in snapshot['links'] if any(w in (x['text']+' '+x['url']).lower() for w in ['gross','deliver','csv','zip','highlow','bulk','block'])]},ensure_ascii=False),flush=True)
+  result['access_errors']=blocks
   if blocks:raise PermissionError('An official endpoint denied access: '+str(blocks))
   adapt(context,page,key,target,dest,responses,result)
  except Exception as e:result.update(status='FAILED',error=f'{type(e).__name__}: {e}')
