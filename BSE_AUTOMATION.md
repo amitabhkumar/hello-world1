@@ -4,9 +4,9 @@ This repository contains a normal-browser adaptation of the supplied working dow
 
 ## Operation
 
-The BSE Bhavcopy GitHub Actions workflow runs at 08:30 IST weekdays, 16:30 IST weekdays, 22:00 IST daily, and 08:00 IST Saturday. Pushes run offline tests only unless the commit message explicitly includes `[bse-live]` for a deployment acceptance check. Actions → BSE Bhavcopy → Run workflow starts a live run; optionally supply YYYY-MM-DD. Public-repository standard GitHub runners require no paid data subscription. No paid service or new billing plan is configured.
+The BSE Bhavcopy GitHub Actions workflow runs at 08:20 IST weekdays, 19:05 IST weekdays, 22:00 IST daily, and 08:00 IST Saturday. Pushes run offline tests only unless the commit message explicitly includes `[bse-live]` for a deployment acceptance check. Actions → BSE Bhavcopy → Run workflow starts a live run; optionally supply YYYY-MM-DD. Public-repository standard GitHub runners require no paid data subscription. No paid service or new billing plan is configured.
 
-Before 16:30 IST it checks up to 14 prior calendar dates for a published report, including special weekend sessions. At/after 16:30 it requires the current date. An explicit date overrides this. Missing reports are never relabelled, and publication history is not treated as a verified holiday calendar. The SOP task must separately verify the official trading calendar, missing sessions, and report freshness. A layout timeout is a failure, not proof of a holiday. Selectors follow the user-supplied navigation and remain subject to BSE UI changes.
+Before 19:00 IST (including before 08:30), request the previous completed market session from the verified official BSE equity holiday calendar. At/after 19:00, require today on an eligible trading day; on a closed day use the latest eligible session. Never fall back to older data when the required trading-day file is missing. Date arithmetic handles month/year changes. Verified prior-year calendar snapshots support January rollover; missing calendar years fail explicitly. Official special-session dates are retained; session hours are not inferred and an exact final dated file is required. An explicit YYYY-MM-DD overrides automatic selection. The workflow records the selected date, official calendar evidence and observed dropdown options. Date controls are identified from their options, supporting zero-padded days and full month names; DOM position is not assumed.
 
 Every run produces output/manifest.json. Only a validated download adds a CSV. Validation checks the exact date-bearing CM filename, official HTTPS hostname, ZIP integrity and size, required fields, every row's TradDt/Src/Sgmt, instrument IDs and nonzero rows. It records SHA-256, byte count and row count. Invalid downloads are removed. An empty output directory prevents accidental reuse of an old file.
 
@@ -32,3 +32,4 @@ Official references:
 - https://playwright.dev/python/docs/downloads
 - https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 - https://docs.github.com/en/actions/tutorials/store-and-share-data
+

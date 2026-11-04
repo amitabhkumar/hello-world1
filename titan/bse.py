@@ -24,8 +24,8 @@ class Unavailable(RuntimeError):
     pass
 
 
-def targets(now, explicit=None):
-    """Morning: search published history, not a fabricated holiday calendar."""
+def targets(now, explicit=None, holidays=None, calendar_years=None, special_sessions=()):
+    """Before 19:00 IST use previous session; after 19:00 use latest session."""
     if now.tzinfo is None:
         raise ValueError('An aware execution timestamp is required')
     now = now.astimezone(IST)
@@ -34,10 +34,45 @@ def targets(now, explicit=None):
         if day > now.date():
             raise ValueError('Future report date')
         return [day]
-    if now.time() >= time(16, 30):
-        return [now.date()]
-    # Include weekends: exchanges can hold special sessions.
-    return [now.date() - timedelta(days=i) for i in range(1, 15)]
+    if holidays is None or calendar_years is None:
+        raise Unavailable('Verified exchange holiday calendar required')
+    day = now.date() if now.time() >= time(19) else now.date() - timedelta(days=1)
+    for _ in range(370):
+        if day.year not in calendar_years:
+            raise Unavailable(f'Calendar unavailable for {day.year}; do not guess across year boundary')
+        if day in special_sessions or (day.weekday() < 5 and day not in holidays):
+            return [day]
+        day -= timedelta(days=1)
+    raise Unavailable('No eligible session in verified calendar')
+
+
+def date_controls(controls, target):
+    """Identify date dropdowns by their complete options, not DOM position."""
+    choices = {}
+    for index, control in enumerate(controls):
+        if not control.get('visible', True):
+            continue
+        options = control['options']
+        numbers = {int(o['text'].strip()) for o in options if o['text'].strip().isdigit()}
+        month_names = {datetime(2000,m,1).strftime('%b').lower(): m for m in range(1,13)}
+        labels = {o['text'].strip().lower()[:3] for o in options}
+        role = ('year' if target.year in numbers and any(n >= 2000 for n in numbers)
+                else 'day' if set(range(1,29)).issubset(numbers)
+                else 'month' if set(month_names).issubset(labels) or numbers == set(range(1,13)) else None)
+        if not role:
+            continue
+        wanted = getattr(target, role)
+        matches=[]
+        for option in options:
+            label=option['text'].strip()
+            value=int(label) if label.isdigit() else month_names.get(label.lower()[:3]) if role=='month' else None
+            if value==wanted:matches.append(option['value'])
+        if len(matches)!=1 or role in choices:
+            raise ValueError(f'Ambiguous {role} dropdown/options')
+        choices[role]=(index,matches[0])
+    if set(choices)!={'day','month','year'}:
+        raise ValueError('Cannot identify unique date controls; inspect date_controls.json')
+    return choices
 
 
 def csv_bytes(payload):
@@ -82,13 +117,40 @@ def matching_url(href, target):
                          r'_F_0000\.csv(?:\.zip)?', unquote(u.path).split('/')[-1], re.I) is not None)
 
 
-def collect(candidates, out):
+def collect(candidates, out, now=None, explicit=None, manifest=None):
     from playwright.sync_api import sync_playwright, TimeoutError as BrowserTimeout
     blocked = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         try:
             context = browser.new_context(accept_downloads=True)
+            if candidates is None:
+                from titan.bse_data import collect_one
+                result = collect_one(context, 'calendar', now.date().isoformat(), out)
+                if result['status'] != 'VALIDATED_DATED_RECORDS':
+                    raise Unavailable('Official BSE calendar retrieval/validation failed: '+str(result.get('error')))
+                rows = json.loads((out/'calendar'/'equity_holidays.json').read_text())
+                holidays = {date.fromisoformat(x['date']) for x in rows}
+                if not holidays:
+                    raise Unavailable('Empty annual holiday calendar')
+                notices=result.get('special_session_notices',[])
+                special=set()
+                for notice in notices:
+                    match=re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})',notice)
+                    if 'Muhurat Trading' in notice and match:
+                        special.add(datetime.strptime(match.group(1),'%B %d, %Y').date())
+                manifest['calendar_evidence'] = {'source':result['source_url'], 'rows':len(rows), 'special_session_notices':notices}
+                years={d.year for d in holidays}
+                # Retain verified previous-year calendars for January rollover.
+                for file in (Path(__file__).parent/'calendars').glob('*.json'):
+                    saved=json.loads(file.read_text())
+                    if saved['year'] in years:continue
+                    holidays.update(date.fromisoformat(x) for x in saved['holidays'])
+                    special.update(date.fromisoformat(x) for x in saved.get('special_sessions',[]))
+                    years.add(saved['year'])
+                candidates=targets(now,explicit,holidays,years,special)
+                manifest['calendar_status']='OFFICIAL_CALENDAR; FINAL_FILE_REQUIRED; SPECIAL_SESSION_HOURS_NOT_INFERRED'
+                manifest['requested_dates']=[d.isoformat() for d in candidates]
             page = context.new_page()
             page.set_default_timeout(30_000)
             def response_seen(response):
@@ -108,10 +170,12 @@ def collect(candidates, out):
             page.locator('select').first.wait_for()
             check()
             for target in candidates:
-                selects = page.locator('select')
-                selects.nth(0).select_option(label=str(target.day))
-                selects.nth(1).select_option(label=target.strftime('%b'))
-                selects.nth(2).select_option(label=str(target.year))
+                controls=page.locator('select').evaluate_all("ss=>ss.map(s=>({id:s.id,name:s.name,visible:!!(s.offsetWidth||s.offsetHeight||s.getClientRects().length),options:[...s.options].map(o=>({text:o.text,value:o.value}))}))")
+                (out/'date_controls.json').write_text(json.dumps(controls,indent=2))
+                choices=date_controls(controls,target)
+                for role in ['year','month','day']:
+                    index,value=choices[role]
+                    page.locator('select').nth(index).select_option(value=value)
                 page.locator("#Submit, input[value='Submit'], button:has-text('Submit')").first.click()
                 # Wait for the requested filename or an explicit no-data response.
                 # A timeout is not silently treated as a holiday.
@@ -169,9 +233,9 @@ def main():
                 'drive_status': 'NOT_TRANSFERRED', 'calendar_status': 'VERIFY_IN_SOP_TASK'}
     code = 1
     try:
-        candidates = targets(datetime.now(IST), args.date)
-        manifest['requested_dates'] = [d.isoformat() for d in candidates]
-        manifest.update(collect(candidates, args.output))
+        now=datetime.now(IST)
+        manifest['date_policy']='Before 19:00 IST previous completed session; at/after 19:00 latest eligible session; explicit date overrides'
+        manifest.update(collect(None, args.output, now=now, explicit=args.date, manifest=manifest))
         manifest['status'] = 'VALIDATED_DOWNLOAD'
         code = 0
     except Blocked as e:
@@ -189,3 +253,4 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
+

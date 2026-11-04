@@ -9,9 +9,9 @@ on:
         type: string
         required: false
   schedule:
-    # UTC: 08:30 IST weekdays, 16:30 IST weekdays, 22:00 IST daily, 08:00 IST Saturday.
-    - cron: '0 3 * * 1-5'
-    - cron: '0 11 * * 1-5'
+    # UTC: 08:20 IST weekdays, 19:05 IST weekdays, 22:00 IST daily, 08:00 IST Saturday.
+    - cron: '50 2 * * 1-5'
+    - cron: '35 13 * * 1-5'
     - cron: '30 16 * * *'
     - cron: '30 2 * * 6'
 permissions:
@@ -57,3 +57,4 @@ jobs:
           path: output/
           if-no-files-found: error
           retention-days: 7
+
