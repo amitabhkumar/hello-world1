@@ -1,0 +1,44 @@
+name: NSE REG1 and price bands
+on:
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: 'Exact report date YYYY-MM-DD; blank means current IST date'
+        type: string
+        required: false
+  push:
+    paths: ['nse_automation/**', '.github/workflows/nse_restrictions.yml']
+  schedule:
+    # 20:40 IST daily. Single acquisition, no polling or retry loop.
+    - cron: '10 15 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: nse-restrictions-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install playwright==1.56.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Download exact dated reports once
+        env:
+          REPORT_DATE: ${{ inputs.report_date }}
+        run: |
+          args=()
+          if [ -n "$REPORT_DATE" ]; then args+=(--date "$REPORT_DATE"); fi
+          xvfb-run --auto-servernum python nse_automation/download.py "${args[@]}"
+      - name: Preserve successful files and all failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nse-restrictions-${{ github.run_id }}-${{ github.run_attempt }}
+          path: nse-output/
+          retention-days: 90
+          if-no-files-found: error
