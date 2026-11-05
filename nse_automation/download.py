@@ -1,12 +1,55 @@
 """NSE All Reports: REG1 and price-band acquisition, one attempt per file."""
 import argparse, csv, hashlib, io, json, os, re, sys
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 PAGE = "https://www.nseindia.com/all-reports"
 PATTERN = re.compile(r"^(REG1_IND\d{6}|sec_list_\d{8}|eq_band_changes_\d{8}|sme_bands_complete_\d{8})\.csv$")
+
+# Official equity calendar snapshot reviewed 2026-11-05. Fail closed outside coverage.
+CALENDAR_SOURCES = [
+ "https://nsearchives.nseindia.com/content/circulars/CMTR71775.pdf",
+ "https://www.nseindia.com/resources/exchange-communication-holidays?apiversion=v2",
+ "https://nsearchives.nseindia.com/content/circulars/CMTR72349.pdf",
+ "https://nsearchives.nseindia.com/content/circulars/CMTR76941.pdf"]
+HOLIDAYS = set("2026-01-15 2026-01-26 2026-03-03 2026-03-26 2026-03-31 2026-04-03 2026-04-14 2026-05-01 2026-05-28 2026-06-26 2026-09-14 2026-10-02 2026-10-20 2026-11-10 2026-11-24 2026-12-25".split())
+SPECIAL = {"2026-02-01", "2026-11-08"}
+def is_session(d):
+    if d.year != 2026:
+        raise ValueError("CALENDAR_COVERAGE_MISSING: " + str(d))
+    return d.isoformat() in SPECIAL or (d.weekday() < 5 and d.isoformat() not in HOLIDAYS)
+def select_date(now, explicit=None):
+    now = now.astimezone(IST)
+    today = now.date()
+    is_session(today)  # Even an explicit old date must not conceal expired coverage.
+    if explicit:
+        d = date.fromisoformat(explicit)
+        if d > today or not is_session(d):
+            raise ValueError("Requested date is future or not an eligible equity session")
+    elif is_session(today) and now.time() >= time(16, 0):
+        d = today  # 16:30 records today's pending publication, never yesterday as final.
+    else:
+        d = today - timedelta(days=1) if is_session(today) else today
+        while not is_session(d):
+            d -= timedelta(days=1)
+    return d, ("PENDING_PUBLICATION_WINDOW" if d == today and now.time() < time(20,35) else "ELIGIBLE_FOR_SINGLE_ATTEMPT")
+REG1_DEFINITION_SOURCE = "https://nsearchives.nseindia.com/content/circulars/SURV76993.zip"
+# Annexure pages 1-2. These are REG1 per-field codes, NOT REG_IND composite codes.
+REG1_MAPS = {
+ "Status": {"A":"Active", "S":"Suspended", "I":"Inactive"},
+ "GSM": {"100":"Not applicable", "0":"GSM identified", **{str(n):"GSM stage " + str(n) for n in (1,2,3,4,6)}},
+ "Long_Term_Additional_Surveillance_Measure (Long Term ASM)": {"100":"Not under LTASM", **{str(n):"LTASM stage " + str(n) for n in (1,2,3,4)}},
+ "Short_Term_Additional_Surveillance_Measure (Short Term ASM)": {"100":"Not under STASM", "1":"STASM stage 1", "2":"STASM stage 2"},
+ "ESM": {"100":"Not applicable", "1":"ESM stage 1", "2":"ESM stage 2"}}
+def interpret_reg1(payload):
+    rows = list(csv.DictReader(io.StringIO(payload.decode("utf-8-sig"))))
+    return [dict(symbol=r.get("Symbol"), series=r.get("Series"),
+        indicators={k:dict(raw=r.get(k), meaning=v.get(r.get(k," ").strip(),"Unknown")) for k,v in REG1_MAPS.items()},
+        trading_access="Unknown", effective_trading_date=None,
+        reason="Code labels only. Effective date and applicable session restrictions require dated notices.") for r in rows]
+
 def validate(payload, name):
     if not PATTERN.fullmatch(name): raise ValueError("Unexpected filename")
     if not payload or len(payload)>20_000_000: raise ValueError("Empty/oversized file")
@@ -32,20 +75,21 @@ def main():
     ap.add_argument("--output",type=Path,default=Path("nse-output"))
     args=ap.parse_args()
     now=datetime.now(IST)
-    target=date.fromisoformat(args.date) if args.date else now.date()
+    target=now.date()
     out=args.output
     out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()): raise ValueError("Output must be empty")
     m=dict(started_at=now.isoformat(),requested_date=target.isoformat(),source_page=PAGE,
            commit=os.getenv("GITHUB_SHA"),run_id=os.getenv("GITHUB_RUN_ID"),run_attempt=os.getenv("GITHUB_RUN_ATTEMPT"),
            retry_policy="NONE",drive_status="NOT_TRANSFERRED",datasets=[],
-           date_policy="Exact requested/current IST date. Never substitute older files. Future-dated band changes stored separately.",
-           calendar_status="NOT_VERIFIED; absent date is not classified as holiday",
+           date_policy="Official equity calendar; morning previous session; post-market today pending until 20:35; closed day latest session; no older substitute.",
+           calendar_status="2026_OFFICIAL_SNAPSHOT_REVIEWED_2026_11_05", calendar_sources=CALENDAR_SOURCES,
            interpretation_status="Acquisition only; effective dates and regulatory code meanings require official definitions")
     exitcode=1
     try:
-        if target>now.date(): raise ValueError("Future requested date")
-        if target==now.date() and now.time()<time(20,35):
+        target, publication_status = select_date(now, args.date)
+        m.update(requested_date=target.isoformat(), publication_status=publication_status, publication_timestamp=None)
+        if publication_status == "PENDING_PUBLICATION_WINDOW":
             m["status"]="PENDING_PUBLICATION_WINDOW"
             return 2
         from playwright.sync_api import sync_playwright
@@ -92,6 +136,9 @@ def main():
                         data=tmp.read_bytes()
                         item.update(validate(data,name),source_url=source,retrieved_at=datetime.now(IST).isoformat(),status="VALIDATED_DOWNLOAD")
                         tmp.rename(out/name)
+                        if name.startswith("REG1_"):
+                            interpreted=interpret_reg1(data)
+                            (out/"reg1_interpreted.json").write_text(json.dumps(dict(source=REG1_DEFINITION_SOURCE,records=interpreted),indent=2))
                     except Exception as e:
                         item.update(status="FAILED",error=type(e).__name__+": "+str(e))
                         (out/(name+".part")).unlink(missing_ok=True)
@@ -108,3 +155,4 @@ def main():
         print(json.dumps(m,indent=2))
     return exitcode
 if __name__=="__main__": sys.exit(main())
+
