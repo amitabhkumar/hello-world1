@@ -15,8 +15,12 @@ Also collect displayed same-date band changes/SME bands and separately identifie
 
 Validation checks official HTTPS source, exact selected/downloaded filename, CSV structure, required column families, nonempty consistent rows, byte count, SHA256. Acquisition validation does not interpret surveillance codes or establish effective trading dates.
 
-## Calendar limit
-This first acquisition version requests the exact IST calendar date. It does not declare a missing file a holiday, infer prior-session eligibility, or substitute an older file. Calendar-based closed-day reuse is NOT IMPLEMENTED and remains an explicit limitation. The research consumer must verify the official NSE calendar and applicable effective date before using a prior-session artifact.
+## Calendar selection (2026-11-05 revision)
+The collector uses the official 2026 NSE equity holiday snapshot, the January 15 amendment, February 1 Budget session and November 8 Muhurat session. Sources are in CALENDAR_SOURCES. Morning selects the preceding eligible session; 16:30 selects today but records publication pending until the configured 20:35 window; closed days select the latest eligible session. Missing required files never cause an older-date fallback. Dates outside 2026 fail explicitly, including a year rollover needing adjacent-year coverage. This snapshot must be revised for new exchange notices and the next year; it is not a live calendar subscription.
+
+Status, GSM, LTASM, STASM and ESM field labels are decoded from the official SURV76993 annexure. REG1 codes differ from REG_IND composite indicators. Unknown codes remain Unknown. This partial interpretation does not establish effective dates or permitted trading sessions; trading_access remains Unknown. The forthcoming ETF field is not silently activated.
+
+Tests: PYTHONPATH=. python tests/test_nse_session_selection.py. Optional NSE_ARTIFACT_DIR validates an existing artifact. Tests cover weekend, holiday, special sessions, publication gate, month transition and fail-closed year coverage. Live deployment acceptance remains separate from unit tests.
 
 ## Drive delivery
 GitHub artifact creation and Drive delivery are separate stages. The scheduled TITAN consumer must fetch the artifact, independently verify bytes/manifest, check existing files by date/hash, upload missing files into its authorized Incoming folder and read them back. Append a receipt and daily tracker. No private folder IDs or Google credentials are stored in this public repository. Missing execution environment means delivery pending, never success.
