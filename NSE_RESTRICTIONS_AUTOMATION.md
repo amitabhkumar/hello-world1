@@ -3,7 +3,7 @@
 This independent workflow follows NSE All Reports, selects actual displayed report cards, and downloads through a normal Chromium browser on a GitHub-hosted runner. It requires no personal computer or interactive browser session. Existing BSE code is unchanged.
 
 ## Schedule and invocation
-Runs once at 20:40 Asia/Kolkata daily (15:10 UTC), plus workflow_dispatch with an optional exact YYYY-MM-DD date. Pushes touching the NSE collector/workflow execute a live acceptance test. Do not submit duplicate runs while one is active. GitHub schedules can be delayed or missed.
+Runs at 08:30 IST weekdays (03:00 UTC), 16:30 IST weekdays (11:00 UTC), 22:00 IST daily (16:30 UTC), and Saturday 08:00 IST (02:30 UTC), plus workflow_dispatch with an optional exact YYYY-MM-DD date. Pushes touching the NSE collector/workflow execute a live acceptance test. Do not submit duplicate runs while one is active. GitHub schedules can be delayed or missed.
 
 No repeated download loop, guessed URL probing, access-control bypass, or older-date substitution. Requests for today's file before 20:35 IST are publication-pending. The window is a user-selected operating configuration, not an exchange publication guarantee.
 
