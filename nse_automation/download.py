@@ -18,7 +18,7 @@ def validate(payload, name):
     if not any("symbol" in x for x in norm): raise ValueError("Missing symbol column")
     if name.startswith("REG1_") and not any("gsm" in x or "surveillance" in x or "esm" in x for x in norm):
         raise ValueError("Missing surveillance fields")
-    if not name.startswith("REG1_") and not any("band" in x or "price" in x for x in norm):
+    if not name.startswith("REG1_") and not (any("band" in x or "price" in x for x in norm) or (name.startswith("eq_band_changes_") and {"from","to"}.issubset(norm))):
         raise ValueError("Missing band/price columns")
     records=[r for r in rows[1:] if any(x.strip() for x in r)]
     if not records or any(len(r)!=len(header) for r in records): raise ValueError("Empty/ragged CSV")
@@ -97,8 +97,8 @@ def main():
                         (out/(name+".part")).unlink(missing_ok=True)
                 page.screenshot(path=str(out/"all_reports.png"),full_page=True)
                 good={x["filename"] for x in m["datasets"] if x["status"]=="VALIDATED_DOWNLOAD"}
-                m["status"]="REQUIRED_DOWNLOADS_VALIDATED" if set(required)<=good else "PARTIAL_OR_BLOCKED"
-                exitcode=0 if set(required)<=good else 1
+                m["status"]="ALL_SELECTED_DOWNLOADS_VALIDATED" if set(required)<=good and all(x["status"]=="VALIDATED_DOWNLOAD" for x in m["datasets"]) else "PARTIAL_OR_BLOCKED"
+                exitcode=0 if m["status"]=="ALL_SELECTED_DOWNLOADS_VALIDATED" else 1
             finally: browser.close()
     except Exception as e:
         m.update(status="FAILED",error=type(e).__name__+": "+str(e))
