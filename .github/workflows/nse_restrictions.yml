@@ -9,8 +9,11 @@ on:
   push:
     paths: ['nse_automation/**', '.github/workflows/nse_restrictions.yml']
   schedule:
-    # 20:40 IST daily. Single acquisition, no polling or retry loop.
-    - cron: '10 15 * * *'
+    # SOP starts in IST: 08:30 weekdays, 16:30 weekdays, 22:00 daily, Saturday 08:00.
+    - cron: '0 3 * * 1-5'
+    - cron: '0 11 * * 1-5'
+    - cron: '30 16 * * *'
+    - cron: '30 2 * * 6'
 permissions:
   contents: read
 concurrency:
