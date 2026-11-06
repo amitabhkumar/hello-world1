@@ -53,6 +53,47 @@ def next_session(report_date):
         d += timedelta(days=1)
     return d
 
+
+PRICE_HISTORY_SOURCE = "https://www.nseindia.com/reports/price-band-changes"
+def verify_band_changes(payload, history, expected_date):
+    if not isinstance(history, list):
+        raise ValueError("Price-band history is not a list")
+    records = list(csv.DictReader(io.StringIO(payload.decode("utf-8-sig"))))
+    if not records:
+        raise ValueError("Empty band changes")
+    matches = []
+    for raw in records:
+        r = {k.strip().lower(): str(v).strip() for k, v in raw.items()}
+        candidates = [h for h in history if h.get("symbol") == r.get("symbol")
+            and str(h.get("fromPriceBand")) == r.get("from")
+            and str(h.get("toPriceBand")) == r.get("to")
+            and datetime.strptime(h["effectiveDate"], "%d-%b-%Y").date() == expected_date]
+        if len(candidates) != 1:
+            raise ValueError("Missing or ambiguous effective-date evidence: " + str(r.get("symbol")))
+        matches.append(dict(csv_record=raw, official_record=candidates[0]))
+    return dict(status="ROW_MATCH_VERIFIED", effective_date=expected_date.isoformat(),
+                source=PRICE_HISTORY_SOURCE, records=matches,
+                scope="Only these change rows; not complete security-master permission")
+
+def session_constraints(row, effective_date):
+    rules = []
+    if row.get("Status") in ("S", "I"):
+        rules.append(dict(rule="STATUS_NOT_ACTIVE", source=REG1_DEFINITION_SOURCE))
+    if row.get("GSM") in ("3", "4"):
+        monday = effective_date - timedelta(days=effective_date.weekday())
+        first = monday
+        while not is_session(first):
+            first += timedelta(days=1)
+        rules.append(dict(rule="GSM_WEEKLY_SESSION", permitted_weekday_date=first.isoformat(),
+            matches_weekly_date=effective_date == first, no_upward_movement=row.get("GSM") == "4",
+            source="https://www.nseindia.com/static/regulations/graded-surveillance-measure"))
+    if row.get("ESM") == "2":
+        rules.append(dict(rule="ESM_STAGE_II", session="Periodic call auction", price_band_percent=2,
+            trade_for_trade=True, margin_percent=100,
+            source="https://nsearchives.nseindia.com/content/circulars/SURV69315.pdf"))
+    return dict(rules=rules, coverage="PARTIAL_FRAMEWORK_RULES", trading_access="Unknown",
+                reason="Other overlapping measures, dated notices and complete band snapshots still require reconciliation")
+
 def interpret_reg1(payload, report_date=None):
     rows = list(csv.DictReader(io.StringIO(payload.decode("utf-8-sig"))))
     effective = next_session(report_date).isoformat() if report_date else None
@@ -71,6 +112,7 @@ def interpret_reg1(payload, report_date=None):
         output.append(dict(symbol=r.get("Symbol"), series=r.get("Series"),
             indicators=indicators, report_date=report_date.isoformat() if report_date else None,
             effective_trading_date=effective, effective_date_source=REG1_EFFECTIVE_SOURCE,
+            session_constraints=session_constraints(r, date.fromisoformat(effective)) if effective else None,
             trading_access="Unknown", snapshot_status=REG1_MAPS["Status"].get(r.get("Status"),"Unknown"),
             reason="Effective REG1 labels verified; permission additionally requires current session, band and dated restriction notices."))
     return output
@@ -137,6 +179,21 @@ def main():
                 names=sorted({x["name"] for x in inventory if x["visible"] and PATTERN.fullmatch(x["name"])})
                 required=["REG1_IND"+target.strftime("%d%m%y")+".csv","sec_list_"+target.strftime("%d%m%Y")+".csv"]
                 selected=[n for n in names if filedate(n)==target or (n.startswith(("eq_band_changes_","sme_bands_complete_")) and filedate(n)>target)]
+                history = None
+                band_dates = [filedate(n) for n in selected if n.startswith("eq_band_changes_")]
+                if band_dates:
+                    history_url = "https://www.nseindia.com/api/eqsurvactions?from_date=" + min(band_dates).strftime("%d-%m-%Y") + "&to_date=" + max(band_dates).strftime("%d-%m-%Y")
+                    m["band_history"] = dict(source_url=history_url, status="STARTED")
+                    try:
+                        response = context.request.get(history_url, timeout=45000)
+                        if not response.ok:
+                            raise ValueError("History HTTP " + str(response.status))
+                        history_bytes = response.body()
+                        (out/"price_band_effective_history.json").write_bytes(history_bytes)
+                        history = json.loads(history_bytes)
+                        m["band_history"].update(status="RETRIEVED", sha256=hashlib.sha256(history_bytes).hexdigest(), retrieved_at=datetime.now(IST).isoformat())
+                    except Exception as e:
+                        m["band_history"].update(status="UNAVAILABLE", error=type(e).__name__ + ": " + str(e))
                 for name in required:
                     if name not in selected: m["datasets"].append(dict(filename=name,status="UNAVAILABLE",error="Exact dated file absent from loaded All Reports inventory; calendar/publication not inferred"))
                 for name in selected:
@@ -161,6 +218,13 @@ def main():
                         data=tmp.read_bytes()
                         item.update(validate(data,name),source_url=source,retrieved_at=datetime.now(IST).isoformat(),status="VALIDATED_DOWNLOAD")
                         tmp.rename(out/name)
+                        if name.startswith("eq_band_changes_"):
+                            try:
+                                evidence = verify_band_changes(data, history, filedate(name))
+                                (out/(name + ".effective.json")).write_text(json.dumps(evidence, indent=2))
+                                item.update(effective_date=evidence["effective_date"], effective_date_status="ROW_MATCH_VERIFIED", effective_date_source=PRICE_HISTORY_SOURCE)
+                            except Exception as e:
+                                item["effective_date_error"] = type(e).__name__ + ": " + str(e)
                         if name.startswith("REG1_"):
                             interpreted=interpret_reg1(data, filedate(name))
                             item.update(effective_date=next_session(filedate(name)).isoformat(), effective_date_source=REG1_EFFECTIVE_SOURCE)
@@ -181,5 +245,6 @@ def main():
         print(json.dumps(m,indent=2))
     return exitcode
 if __name__=="__main__": sys.exit(main())
+
 
 
