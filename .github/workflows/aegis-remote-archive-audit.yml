@@ -1,0 +1,97 @@
+name: AEGIS remote encrypted Upstox ZIP audit
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-remote-archive-audit.yml'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate ephemeral audit-runner RSA key and announce public modulus
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/aegis-private.pem 2>/dev/null
+          openssl pkey -in /tmp/aegis-private.pem -pubout -out /tmp/aegis-public.pem
+          openssl rsa -pubin -in /tmp/aegis-public.pem -modulus -noout | sed 's/^Modulus=/AEGIS_RSA_MODULUS=/'
+          echo 'PRIVATE KEY IS IN THE RUNNER ONLY'
+      - name: Wait for encrypted one-time file transfer and decrypt
+        run: |
+          python - <<'PY'
+          import json,os,subprocess,time,urllib.request,urllib.error
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/aegis/_private_handoff/zip-link.enc.json?ref=aegis-nifty-backtest"
+          for attempt in range(96):
+              try:
+                  request=urllib.request.Request(url,headers={"Accept":"application/vnd.github.raw+json",
+                       "Authorization":"Bearer "+os.environ.get("GH_TOKEN",""),"Cache-Control":"no-cache",
+                       "User-Agent":"AEGIS-safe-zip-audit"})
+                  with urllib.request.urlopen(request,timeout=20) as res:
+                      content=res.read().decode("utf-8")
+                  # GitHub API raw media returns JSON file body in this Accept mode.
+                  payload=json.loads(content)
+                  if "blocks" in payload:break
+              except (urllib.error.HTTPError,urllib.error.URLError,ValueError):
+                  pass
+              time.sleep(5)
+          else:raise SystemExit("Encrypted transfer never arrived; no file was downloaded")
+          if payload.get("scheme")!="RSA-PKCS1v1_5-ephemeral":
+              raise SystemExit("Unexpected handoff encryption marker")
+          blocks=payload.get("blocks",[])
+          if not 1<=len(blocks)<=10:raise SystemExit("Invalid ciphertext block count")
+          plaintext=[]
+          for block in blocks:
+              data=bytes.fromhex(block)
+              proc=subprocess.run(["openssl","pkeyutl","-decrypt","-inkey","/tmp/aegis-private.pem",
+                   "-pkeyopt","rsa_padding_mode:pkcs1"],input=data,
+                   stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+              plaintext.append(proc.stdout)
+          src=b"".join(plaintext).decode("utf-8")
+          from urllib.parse import urlparse
+          parsed=urlparse(src)
+          if parsed.scheme!="https" or not parsed.hostname or not parsed.hostname.endswith(".oaiusercontent.com"):
+              raise SystemExit("Refused unsupported download host")
+          # Don't log the URL, response headers or signed URL credentials.
+          request=urllib.request.Request(src,headers={"User-Agent":"AEGIS-archive-audit/1.0"})
+          with urllib.request.urlopen(request,timeout=180) as response:
+              with open("AEGIS_Upstox_Export.zip","wb") as file:
+                  size=0
+                  while True:
+                      chunk=response.read(1024*1024)
+                      if not chunk:break
+                      file.write(chunk)
+                      size+=len(chunk)
+          print(f"Encrypted handoff received, decrypted on runner and downloaded {size} bytes",flush=True)
+          if size<90000000:raise SystemExit("Downloaded archive smaller than expected")
+          PY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Audit ZIP CRC, metadata hashes, session hours and gaps
+        run: |
+          python aegis/audit_upstox_zip.py AEGIS_Upstox_Export.zip --output AEGIS_upstox_archive_audit.json
+          python - <<'PY'
+          import json
+          x=json.load(open("AEGIS_upstox_archive_audit.json"))
+          print("AUDIT SUMMARY",json.dumps({
+              "csv_counts":x.get("csv_counts"),
+              "hash_verified":x.get("sha_metadata_verified"),
+              "sha_metadata_mismatch":x.get("sha_metadata_mismatch"),
+              "contract_file_count_vs_manifest":x.get("contract_file_count_vs_manifest"),
+              "corrupted_csv":len(x.get("csv_corrupted_or_unreadable",[])),
+              "coverage_alerts":x.get("coverage_alerts")
+          },indent=2))
+          PY
+      - name: Archive sanitized audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-upstox-original-zip-audit
+          path: AEGIS_upstox_archive_audit.json
+          if-no-files-found: warn
+          retention-days: 30
