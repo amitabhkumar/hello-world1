@@ -12,7 +12,7 @@ import pandas as pd
 import duckdb
 
 START=dt.date(2024,10,1)
-END=dt.date(2026,4,30)  # public NIFTY 5-minute index reference ends around Apr 2026
+END=dt.date(2026,11,5)  # full intended 2026 research window; options expire through Nov03
 COMMISSION_PER_ORDER=20.0
 EXCH_RATE=0.0003503
 GST_RATE=0.18
@@ -110,7 +110,9 @@ def estimate_greeks(spot,k,days,typ,option_mid):
     return {"iv":vol,"delta":delta,"gamma":gamma,"theta_per_day":theta/365.0,"vega_per_ivpt":vega}
 
 def load_market_context(root):
-    spot=pd.read_csv(root/"NIFTY_5min_5yr_2021_2026.csv",parse_dates=["timestamp"])
+    source=root/"NIFTY_5min_2026_extended.csv"
+    if not source.exists():source=root/"NIFTY_5min_5yr_2021_2026.csv"
+    spot=pd.read_csv(source,parse_dates=["timestamp"])
     spot=spot[(spot.timestamp.dt.date>=START)&(spot.timestamp.dt.date<=END)].copy()
     spot["d"]=spot.timestamp.dt.date
     spot["hm"]=spot.timestamp.dt.strftime("%H:%M")
@@ -127,7 +129,7 @@ def load_market_context(root):
     daily["retvol20"]=daily.ret.shift(1).rolling(20).std()*np.sqrt(252)*100
     daily["rng5"]=(daily.high.shift(1).rolling(5).max()-daily.low.shift(1).rolling(5).min())/daily.close.shift(1)
     vix={}
-    for year in [2024,2025]:
+    for year in [2024,2025,2026]:
         f=root/f"vix_{year}.csv"
         if not f.exists():continue
         vi=pd.read_csv(f,encoding="utf-8-sig")
@@ -180,7 +182,8 @@ def load_quotes(path,spot,daily,year):
     con.execute("SET TimeZone='Asia/Kolkata'")
     con.execute("SET memory_limit='4GB'")
     con.register("spot_ref",spotdays[["date","reference_spot"]])
-    parquet=str(path).replace("'","''")
+    files=[str(x).replace("'","''") for x in str(path).split(";")]
+    source_sql="["+(",".join("'"+x+"'" for x in files))+"]"
     sql=f"""
     CREATE TABLE q AS
     SELECT CAST(o.date AS DATE) AS d, CAST(o.expiry AS DATE) AS exp,
@@ -188,7 +191,7 @@ def load_quotes(path,spot,daily,year):
       strftime(o.timestamp,'%Y-%m-%d %H:%M:%S') AS ts,
       strftime(o.timestamp,'%H:%M') AS hm,
       CAST(o.open AS DOUBLE) AS px, CAST(o.volume AS DOUBLE) AS vol
-    FROM read_parquet('{parquet}') o
+    FROM read_parquet({source_sql}, union_by_name=true) o
     JOIN spot_ref s ON o.date=s.date
     WHERE TRY_CAST(o.expiry AS DATE)>CAST(o.date AS DATE)+INTERVAL 2 DAY
       AND TRY_CAST(o.expiry AS DATE)<=CAST(o.date AS DATE)+INTERVAL 16 DAY
@@ -369,10 +372,10 @@ def main():
       "aegis_gap_next_session_big":summarize([x for x in aegis if x.get("next_day_gap") is not None and abs(x["next_day_gap"])>=.0075]),
       "skips":pd.DataFrame(skips).reason.value_counts().to_dict() if skips else {},
       "greeks_all_legs_count":sum(1 for x in aegis if x["greeks_covered_all_legs"]),
-      "source":"NIFTY traded 1m option OHLC, 5m cash index, 2024-25 prior-day VIX",
+      "source":"NIFTY traded 1m option OHLC; stitched 5m cash index; 2024-26 prior-day VIX where available",
       "model":f"one lot, {SLIP_PCT:.3%} premium or {SLIP_FLOOR:.2f} pt each execution leg, 20 rupees commission/leg/order, estimated taxes; no bid/ask",
       "lookahead":"Signal at 10:05, enter using 10:06 1-minute OPEN, 15m open-price monitoring; not an orderbook simulation",
-      "held_out":a.year==2026,"limitations":["No real bid/ask or historical intraday futures","2026 VIX source missing","NIFTY index spot reference ends Apr 2026","2024 Nov20-Dec31 excluded due contract-size transition","no genuine intraminute stop execution"]}
+      "held_out":False,"holdout_caveat":"Previously evaluated 2026 data; revised 2026 results are exploratory and not a pristine holdout", "limitations":["No real bid/ask (Upstox options are OHLC)","2026 VIX unavailable before July 22","Upstox expiry derivatives missing Nov4-Nov5 options and Oct28-Nov5 futures","2024 Nov20-Dec31 excluded due contract-size transition","no genuine intraminute stop execution"]}
     (out/f"summary_{a.year}.json").write_text(json.dumps(stats,indent=2,default=str))
     print("AEGIS_RESULT",json.dumps(stats,default=str),flush=True)
 
