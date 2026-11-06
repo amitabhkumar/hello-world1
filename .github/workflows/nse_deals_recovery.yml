@@ -58,6 +58,7 @@ jobs:
               response=context.request.get(url,timeout=60000)
               body=response.body();r.update(http_status=response.status,bytes=len(body),sha256=hashlib.sha256(body).hexdigest())
               if response.status!=200:raise ValueError("HTTP "+str(response.status))
+              name=kind+"_"+day.strftime("%d%m%Y")+".csv";(out/name).write_bytes(body);r["file"]=name
               text=body.decode("utf-8-sig")
               if text.lstrip().startswith("<"):raise ValueError("HTML instead of CSV")
               rows=list(csv.DictReader(io.StringIO(text)));r["rows"]=len(rows);r["fields"]=list(rows[0]) if rows else []
@@ -66,7 +67,7 @@ jobs:
               if len(datecols)!=1:raise ValueError("Missing/ambiguous date field")
               observed={row[datecols[0]].strip() for row in rows}
               expected={day.strftime("%d-%b-%Y"),day.strftime("%d-%m-%Y"),day.strftime("%d/%m/%Y"),str(day)}
-              if not observed.issubset(expected):raise ValueError("Source dates differ: "+str(observed))
+              if not {x.upper() for x in observed}.issubset({x.upper() for x in expected}):raise ValueError("Source dates differ: "+str(observed))
               name=kind+"_"+day.strftime("%d%m%Y")+".csv";(out/name).write_bytes(body);r.update(file=name,status="VALIDATED_DATE_CSV",source_dates=sorted(observed))
              except Exception as e:r.update(status="BLOCKED",error=str(e))
              manifest["datasets"].append(r)
