@@ -80,7 +80,7 @@ def main():
         "A, B and C simplified v0.1 strategy, not fully institutional specification",
         "Missing November 4-5 options and October 28-November 5 futures",
         "2026 is no longer pristine OOS after analysis in earlier runs",
-        "2024 options Jan-Sep missing from prior coverage",
+        "Rolling Nov2024-Nov2026 dataset has late-2024 lot-size transition exclusions; Jan-Sep2024 history is not required for a trailing two-year window",
         "Different NIFTY spot sources near April22 and July22 data seams",
         "Greeks approximated under fixed interest rate and dividend assumptions",
         "IID bootstrap may understate calendar/regime dependence"]}
