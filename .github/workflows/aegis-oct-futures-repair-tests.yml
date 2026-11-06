@@ -1,0 +1,40 @@
+name: AEGIS October 2026 futures repair regression QA
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-oct-futures-repair-tests.yml'
+      - 'aegis/aegis_repair_oct_futures.py'
+      - 'aegis/upstox_active_gap_patch.py'
+  workflow_dispatch:
+jobs:
+  test-read-only-repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Compile scripts and assert futures vs options cutoff regression fixed
+        run: |
+          python -m py_compile aegis/upstox_active_gap_patch.py aegis/aegis_repair_oct_futures.py
+          python aegis/upstox_active_gap_patch.py --self-test
+          python aegis/aegis_repair_oct_futures.py --self-test
+      - name: Ensure actual Windows-deliverable repair has no external Python dependencies
+        shell: bash
+        run: |
+          mkdir -p /tmp/aegis-futures-repair-standalone
+          cp aegis/aegis_repair_oct_futures.py /tmp/aegis-futures-repair-standalone/aegis_repair_oct_futures.py
+          cd /tmp/aegis-futures-repair-standalone
+          python aegis_repair_oct_futures.py --self-test
+          python - <<'PY'
+          import aegis_repair_oct_futures as r
+          import datetime as dt
+          assert len(r.NEEDED)==3
+          assert r.NEEDED[0]==dt.date(2026,10,28)
+          assert r.DAY_BARS==385
+          assert not r.valid_bar(["2026-10-28T15:40:00+05:30",100,110,90,101,100,10])
+          assert r.valid_bar(["2026-10-28T15:39:00+05:30",100,110,90,101,100,10])
+          print("STANDALONE_FUTURES_REPAIR_VALIDATION_SUCCEEDED")
+          PY
