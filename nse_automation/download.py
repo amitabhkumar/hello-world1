@@ -75,24 +75,81 @@ def verify_band_changes(payload, history, expected_date):
                 source=PRICE_HISTORY_SOURCE, records=matches,
                 scope="Only these change rows; not complete security-master permission")
 
+GSM_RULE_SOURCE = "https://nsearchives.nseindia.com//web/mediaattachment/2026-06/FAQs_-_Graded_Surveillance_Measure_GSM_Version_1.1_20260612125858.pdf"
+ESM_RULE_SOURCE = "https://nsearchives.nseindia.com/content/circulars/SURV69315.pdf"
+
 def session_constraints(row, effective_date):
-    rules = []
-    if row.get("Status") in ("S", "I"):
+    """Snapshot-date GSM/ESM rules. A known denial dominates unresolved permissions.
+
+    Evaluates only the effective date, never a later intraday permission.
+    Other frameworks and notices cannot be cleared by this function.
+    """
+    gsm, esm, status = (str(row.get(k, "")).strip() for k in ("GSM", "ESM", "Status"))
+    rules, blockers, unknown = [], [], []
+    session_open = is_session(effective_date)
+    if not session_open:
+        blockers.append("EXCHANGE_CLOSED")
+    if status in ("S", "I"):
         rules.append(dict(rule="STATUS_NOT_ACTIVE", source=REG1_DEFINITION_SOURCE))
-    if row.get("GSM") in ("3", "4"):
-        monday = effective_date - timedelta(days=effective_date.weekday())
-        first = monday
+        blockers.append("SUSPENDED" if status == "S" else "INACTIVE")
+    elif status != "A":
+        unknown.append("STATUS_MISSING_OR_UNKNOWN")
+    if gsm not in ("100", "0", "1", "2", "3", "4"):
+        unknown.append("GSM_STAGE_" + (gsm or "MISSING") + "_RULE_NOT_VERIFIED")
+    elif gsm == "0":
+        rules.append(dict(rule="GSM_IDENTIFIED_STAGE_0", source=GSM_RULE_SOURCE,
+                          restriction="No stage I-IV action inferred from identification alone"))
+    elif gsm in ("1", "2"):
+        rule = dict(rule="GSM_STAGE_" + gsm, price_band_ceiling_percent=5,
+                    lower_existing_band_preserved=True, source=GSM_RULE_SOURCE)
+        if gsm == "1":
+            rule["margin_percent"] = 100
+        else:
+            rule.update(trade_for_trade=True, buyer_asd_percent=50)
+        rules.append(rule)
+    elif gsm in ("3", "4"):
+        first = effective_date - timedelta(days=effective_date.weekday())
         while not is_session(first):
             first += timedelta(days=1)
+        matches = effective_date == first
         rules.append(dict(rule="GSM_WEEKLY_SESSION", permitted_weekday_date=first.isoformat(),
-            matches_weekly_date=effective_date == first, no_upward_movement=row.get("GSM") == "4",
-            source="https://www.nseindia.com/static/regulations/graded-surveillance-measure"))
-    if row.get("ESM") == "2":
+            matches_weekly_date=matches, no_upward_movement=gsm == "4",
+            trade_for_trade=True, buyer_asd_percent=100, price_band_ceiling_percent=5,
+            lower_existing_band_preserved=True, source=GSM_RULE_SOURCE))
+        if not matches:
+            blockers.append("OUTSIDE_GSM_WEEKLY_SESSION")
+    if esm == "1":
+        rules.append(dict(rule="ESM_STAGE_I", trade_for_trade=True,
+            price_band_percent_if_not_already_2=5, preserve_existing_2_percent_band=True,
+            margin_percent=100, margin_activation="T+2 from inclusion; inclusion date required",
+            source=ESM_RULE_SOURCE))
+    elif esm == "2":
         rules.append(dict(rule="ESM_STAGE_II", session="Periodic call auction", price_band_percent=2,
-            trade_for_trade=True, margin_percent=100,
-            source="https://nsearchives.nseindia.com/content/circulars/SURV69315.pdf"))
-    return dict(rules=rules, coverage="PARTIAL_FRAMEWORK_RULES", trading_access="Unknown",
-                reason="Other overlapping measures, dated notices and complete band snapshots still require reconciliation")
+            trade_for_trade=True, margin_percent=100, frequency="All eligible trading days",
+            source=ESM_RULE_SOURCE))
+    elif esm != "100":
+        unknown.append("ESM_STAGE_" + (esm or "MISSING") + "_RULE_NOT_VERIFIED")
+    framework_known = gsm in ("100", "0", "1", "2", "3", "4") and esm in ("100", "1", "2")
+    if blockers:
+        framework_result = "BLOCKED"
+    elif not framework_known or status != "A":
+        framework_result = "UNKNOWN_INPUT_OR_RULE"
+    elif esm == "2":
+        framework_result = "PERIODIC_CALL_AUCTION_REQUIRED"
+    elif gsm in ("3", "4"):
+        framework_result = "WEEKLY_SESSION_DATE_MATCHED"
+    else:
+        framework_result = "NO_GSM_ESM_SESSION_PROHIBITION"
+    return dict(rules=rules, coverage="GSM_0_I_IV_AND_ESM_I_II",
+        effective_date=effective_date.isoformat(), gsm_esm_session_result=framework_result,
+        framework_rules_verified=framework_known, blockers=blockers, unknown_inputs=unknown,
+        trading_access="Blocked" if blockers else "Unknown",
+        permission_scope="Effective-date REG1 status and GSM/ESM session constraints only",
+        remaining_checks=["Other applicable surveillance frameworks and dated security notices",
+            "Current complete band snapshot and intraday session timetable",
+            "ESM I inclusion date for T+2 margin activation where applicable"],
+        reason="Known prohibition enforced; absence of a GSM/ESM prohibition is not full trading clearance")
+
 
 def interpret_reg1(payload, report_date=None):
     rows = list(csv.DictReader(io.StringIO(payload.decode("utf-8-sig"))))
@@ -109,11 +166,12 @@ def interpret_reg1(payload, report_date=None):
             if k.startswith("Filler"):
                 meaning = "Reserved field; not interpreted" if value in ("", "100") else "Unknown"
             indicators[k] = dict(raw=raw, meaning=meaning)
+        constraints = session_constraints(r, date.fromisoformat(effective)) if effective else None
         output.append(dict(symbol=r.get("Symbol"), series=r.get("Series"),
             indicators=indicators, report_date=report_date.isoformat() if report_date else None,
             effective_trading_date=effective, effective_date_source=REG1_EFFECTIVE_SOURCE,
-            session_constraints=session_constraints(r, date.fromisoformat(effective)) if effective else None,
-            trading_access="Unknown", snapshot_status=REG1_MAPS["Status"].get(r.get("Status"),"Unknown"),
+            session_constraints=constraints,
+            trading_access=constraints["trading_access"] if constraints else "Unknown", snapshot_status=REG1_MAPS["Status"].get(r.get("Status"),"Unknown"),
             reason="Effective REG1 labels verified; permission additionally requires current session, band and dated restriction notices."))
     return output
 
