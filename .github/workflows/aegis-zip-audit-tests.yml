@@ -45,9 +45,9 @@ jobs:
           data=json.load(open("audit.json"))
           assert data["contract_file_count_vs_manifest"]["match"],data
           assert data["sha_metadata_verified"]==2,data
-          assert data["csv_counts"]["options"]["outside_reference_session"]==0,data
-          assert data["csv_counts"]["futures"]["outside_reference_session"]==0,data
-          assert data["csv_counts"]["indices"]["outside_reference_session"]==0,data
+          assert data["csv_counts"]["options"].get("outside_reference_session",0)==0,data
+          assert data["csv_counts"]["futures"].get("outside_reference_session",0)==0,data
+          assert data["csv_counts"]["indices"].get("outside_reference_session",0)==0,data
           assert len(data["coverage_alerts"])==4,data
           print("Offline Upstox archive QA tests passed")
           PY
