@@ -79,6 +79,27 @@ def put_candles(path,rows):
         writer.writerows(rows)
     tmp.replace(path)
 
+def regular_session_bar(timestamp):
+    """Flag normal NSE F&O 09:15-15:29 IST candles; raw data is kept."""
+    try:
+        t=dt.datetime.fromisoformat(str(timestamp))
+        # Broker API timestamps are expected to carry Asia/Kolkata +05:30.
+        if t.tzinfo is None or t.utcoffset()!=dt.timedelta(hours=5,minutes=30):
+            return False
+        return dt.time(9,15)<=t.time().replace(tzinfo=None)<=dt.time(15,29)
+    except (TypeError,ValueError):
+        return False
+
+def valid_cached_contract(path, meta):
+    """Resume only when both file and a matching sha256 manifest are present."""
+    if not path.is_file() or not meta.is_file():return False
+    try:
+        info=json.loads(meta.read_text(encoding="utf-8"))
+        if not info.get("sha256_csv"):return False
+        return hashlib.sha256(path.read_bytes()).hexdigest()==info["sha256_csv"]
+    except (OSError,ValueError,KeyError):
+        return False
+
 def convert(rows):
     data=[]
     for raw in rows or []:
@@ -202,7 +223,10 @@ def probe(client,out,expiry):
             samples={"earliest":min(str(x[0]) for x in rows),"latest":max(str(x[0]) for x in rows)} if rows else {}
             results["expired_candles"].append({
                 "kind":kind,"strike":get_strike(contract),"status":status,
-                "bars":len(rows),"lot_size":contract.get("lot_size"),**samples})
+                "bars":len(rows),"lot_size":contract.get("lot_size"),
+                "regular_session_bars":sum(regular_session_bar(x[0]) for x in rows),
+                "out_of_session_bars":sum(not regular_session_bar(x[0]) for x in rows),
+                **samples})
         except Exception as e:
             results["expired_candles"].append({"kind":kind,"strike":get_strike(contract),"status":"error","message":str(e)})
     results["api_request_count"]=client.request_count
@@ -260,9 +284,10 @@ def export(client,out,first,last,max_contracts,wing,lookback):
             # No index reference = do not silently discard strikes.
             low=-float("inf");high=float("inf")
             print("WARNING: Missing spot reference for",expiry,": no strike filter",flush=True)
-        selected=[o for o in options if get_key(o) and get_strike(o) is not None and
+        # Fetch futures first so small pilot exports always validate this data class.
+        selected=[x for x in futures if get_key(x)]
+        selected+= [o for o in options if get_key(o) and get_strike(o) is not None and
              low<=get_strike(o)<=high and o.get("instrument_type") in ("CE","PE")]
-        selected+= [x for x in futures if get_key(x)]
         print("EXPIRY",expiry,"candidate contracts",len(selected),flush=True)
         for obj in selected:
             typ=obj.get("instrument_type","")
@@ -273,7 +298,7 @@ def export(client,out,first,last,max_contracts,wing,lookback):
             path=out/("options" if typ in ("CE","PE") else "futures")/str(expiry)/(kname+".csv")
             # Metadata contains public contract attributes only, not private user data.
             meta=path.with_suffix(".json")
-            if path.exists() and path.stat().st_size>30:
+            if valid_cached_contract(path,meta):
                 summary["skipped_existing"]+=1
                 continue
             if max_contracts and stored>=max_contracts:
@@ -294,6 +319,9 @@ def export(client,out,first,last,max_contracts,wing,lookback):
                         "strike_price":strike,"lot_size":obj.get("lot_size"),
                         "instrument_key":key,"trading_symbol":obj.get("trading_symbol"),
                         "rows":len(data),"first":str(data[0][0]),"last":str(data[-1][0]),
+                        "regular_session_rows":sum(regular_session_bar(x[0]) for x in data),
+                        "out_of_session_rows":sum(not regular_session_bar(x[0]) for x in data),
+                        "note":"Raw Upstox candles retained. Trading simulator must exclude timestamps outside normal NSE session.",
                         "sha256_csv":hashlib.sha256(path.read_bytes()).hexdigest()})
                     summary["downloaded_contract_files"]+=1
                     print("DOWNLOADED",str(expiry),typ,strike,"bars",len(data),flush=True)
