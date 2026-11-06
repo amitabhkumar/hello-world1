@@ -27,3 +27,9 @@ Cron triggers:08:30 IST Monday-Friday;16:30 IST Monday-Friday;22:00 IST daily;08
 Commit937a0e5e0e92d51008ef44ed92ac44846a7ade61 deployed the schedule, date selection and quantity/price/schema validation. Run42216188918 passed five acceptance test methods covering ten date/time cases, missing2027coverage, invalid explicit dates, schedule configuration, uppercase/mixed dates and malformed values. Its artifact13501990727 recorded PENDING_PUBLICATION_WINDOW for6November at17:45IST, with no requests. Historical download acceptance remains run42215275181 (133bulk rows,2block rows for4November).
 
 GitHub artifacts are retained90days. Automatic GitHub-to-Drive transfer is not configured in this workflow; manifest explicitly reports NOT_TRANSFERRED. Session connector access is not a GitHub runner credential. External persistence/readback must be recorded separately. Existing research forecasts and prior failed runs remain unchanged.
+
+## Connector-based delivery bridge
+
+A separate TITAN artifact delivery task is configured at08:45,16:45 and22:45 IST to collect these GitHub artifacts using the user's existing connected GitHub and Drive tools. It validates reports, deduplicates date/hash, uploads to authorized private destinations and verifies exact hash plus parent readback. It does not install Google credentials inside GitHub or change exchange acquisition schedules.
+
+This is a two-stage architecture: GitHub acquisition, followed by connector-based delivery. Task creation and an inline immediate test do not prove autonomous future execution or punctual cron acquisition. Keep those verification statuses separate. If an artifact is missing/running or transfer runtime unavailable, preserve delivery pending and reconcile the next transfer run. Never expose private destination identifiers or authentication tokens in repository files.
