@@ -1,0 +1,54 @@
+name: AEGIS active-contract supplement safety QA
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-active-gap-check.yml'
+      - 'aegis/upstox_active_gap_patch.py'
+      - 'aegis/upstox_market_export.py'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Offline no-token test of active contract filtering and ZIP export
+        shell: bash
+        run: |
+          python -m py_compile aegis/upstox_market_export.py aegis/upstox_active_gap_patch.py
+          python - <<'PY'
+          import datetime as dt, tempfile, pathlib, zipfile
+          from aegis.upstox_active_gap_patch import run
+          from aegis.upstox_market_export import ReadOnlyClient
+          class FakeClient:
+              request_count=0
+              def active_options(self):
+                  return [{"expiry":"2026-11-10","instrument_type":"CE",
+                     "instrument_key":"NSE_FO|CE1","segment":"NSE_FO",
+                     "underlying_symbol":"NIFTY","strike_price":24500,"lot_size":65}]
+              def current_nifty_futures(self):
+                  return [{"expiry":"2026-11-24","instrument_type":"FUT",
+                     "instrument_key":"NSE_FO|F1","segment":"NSE_FO",
+                     "underlying_symbol":"NIFTY","strike_price":0,"lot_size":65}]
+              def index_candles(self,*a):
+                  return [["2026-11-05T10:06:00+05:30",24500,24510,24490,24505,200,0]]
+              def active_candles(self,key,first,last):
+                  self.request_count+=1
+                  return [["2026-11-05T15:39:00+05:30",200,210,195,205,100,10]]
+          with tempfile.TemporaryDirectory() as tmp:
+              root=pathlib.Path(tmp)/"patch"
+              run(FakeClient(),root,limit=0)
+              assert list((root/"futures").rglob("*.csv"))
+              assert list((root/"options").rglob("*.csv"))
+              with zipfile.ZipFile(pathlib.Path(tmp)/"AEGIS_Upstox_Active_Patch.zip") as z:
+                  assert any("/options/" in p for p in z.namelist())
+              fake=ReadOnlyClient("fake")
+              for blocked in ("/v2/order/place","/v2/portfolio/long-term-holdings"):
+                  try:fake.get(blocked);raise AssertionError("unsafe endpoint allowed")
+                  except ValueError:pass
+          print("Read-only active gap supplement test succeeded")
+          PY
