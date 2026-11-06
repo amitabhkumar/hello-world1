@@ -47,6 +47,8 @@ ALLOWED_PREFIXES=(
  "/v2/expired-instruments/option/contract",
  "/v2/expired-instruments/future/contract",
  "/v2/expired-instruments/historical-candle/",
+ "/v2/option/contract",
+ "/v2/instruments/search",
 )
 
 def parse_date(text):
@@ -182,6 +184,34 @@ class ReadOnlyClient:
                 if attempt<4:time.sleep(2**attempt+1);continue
                 raise RuntimeError("Market data endpoint temporarily unreachable") from None
         raise RuntimeError("Exhausted GET retry budget")
+
+    def active_options(self):
+        """Discover currently listed NIFTY option contracts (no account endpoints)."""
+        x=self.get("/v2/option/contract",{"instrument_key":UNDERLYING})
+        if not isinstance(x,list):raise ValueError("Unexpected active option contract response")
+        return x
+
+    def current_nifty_futures(self):
+        """Find listed NSE NIFTY futures through Upstox's read-only search."""
+        results=[]
+        for page in range(1,6):
+            x=self.get("/v2/instruments/search",{
+                "query":"NIFTY","exchanges":"NSE","segments":"FO",
+                "expiry":"current_month","page_number":page,"records":30})
+            if not isinstance(x,list):raise ValueError("Unexpected instrument search response")
+            results += [r for r in x
+               if r.get("instrument_type")=="FUT"
+               and r.get("segment")=="NSE_FO"
+               and (r.get("underlying_key")==UNDERLYING
+                    or r.get("underlying_symbol")=="NIFTY"
+                    or r.get("trading_symbol","").startswith("NIFTY FUT"))]
+            if len(x)<30:break
+        # Deduplicate keys returned by the search pages.
+        return list({r["instrument_key"]:r for r in results if r.get("instrument_key")}.values())
+
+    def active_candles(self,key,first,last):
+        """Standard historical V3; usable for currently listed derivative keys."""
+        return self.index_candles(key,first,last)
 
     def expiries(self):
         x=self.get("/v2/expired-instruments/expiries",{"instrument_key":UNDERLYING})
