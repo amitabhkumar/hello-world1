@@ -1,0 +1,22 @@
+name: AEGIS fetch spot futures and VIX
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-market-context.yml'
+  workflow_dispatch:
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download public reference data
+        run: python aegis/download_market_context.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aegis-market-context
+          path: AEGIS_SUPPORT/
+          retention-days: 7
