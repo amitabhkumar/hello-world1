@@ -1,0 +1,190 @@
+name: AEGIS v0.2 Upstox 2026 candle replay
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-upstox-2026-replay.yml'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate ephemeral audit-runner RSA key and announce public modulus
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/aegis-private.pem 2>/dev/null
+          openssl pkey -in /tmp/aegis-private.pem -pubout -out /tmp/aegis-public.pem
+          openssl rsa -pubin -in /tmp/aegis-public.pem -modulus -noout | sed 's/^Modulus=/AEGIS_RSA_MODULUS=/'
+          echo 'PRIVATE KEY IS IN THE RUNNER ONLY'
+      - name: Publish ephemeral public modulus, never the private key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,subprocess,base64,json,urllib.request
+          raw=subprocess.check_output(["openssl","rsa","-pubin","-in","/tmp/aegis-public.pem","-modulus","-noout"],text=True)
+          modulus=raw.strip().split("=",1)[1]
+          payload=json.dumps({"run_id":os.environ["GITHUB_RUN_ID"],"modulus_hex":modulus,
+              "exponent":65537,"scheme":"RSA-PKCS1v1_5-ephemeral"})
+          encoded=base64.b64encode(payload.encode()).decode()
+          body=json.dumps({"message":"Ephemeral public key for encrypted market-data handoff",
+               "content":encoded,"branch":"aegis-nifty-backtest"})
+          path="aegis/_private_handoff/pubkey_"+os.environ["GITHUB_RUN_ID"]+".json"
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/"+path
+          req=urllib.request.Request(url,data=body.encode(),method="PUT",
+                headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                  "Accept":"application/vnd.github+json","Content-Type":"application/json"})
+          with urllib.request.urlopen(req,timeout=30) as res:
+              print("Ephemeral public key published:",path,flush=True)
+          PY
+      - name: Wait for encrypted one-time file transfer and decrypt
+        run: |
+          python - <<'PY'
+          import json,os,subprocess,time,urllib.request,urllib.error
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/aegis/_private_handoff/replay-zip-link.enc.json?ref=aegis-nifty-backtest"
+          for attempt in range(96):
+              try:
+                  request=urllib.request.Request(url,headers={"Accept":"application/vnd.github.raw+json",
+                       "Authorization":"Bearer "+os.environ.get("GH_TOKEN",""),"Cache-Control":"no-cache",
+                       "User-Agent":"AEGIS-safe-zip-audit"})
+                  with urllib.request.urlopen(request,timeout=20) as res:
+                      content=res.read().decode("utf-8")
+                  # GitHub API raw media returns JSON file body in this Accept mode.
+                  payload=json.loads(content)
+                  if "blocks" in payload:break
+              except (urllib.error.HTTPError,urllib.error.URLError,ValueError):
+                  pass
+              time.sleep(5)
+          else:raise SystemExit("Encrypted transfer never arrived; no file was downloaded")
+          if payload.get("scheme")!="RSA-PKCS1v1_5-ephemeral":
+              raise SystemExit("Unexpected handoff encryption marker")
+          blocks=payload.get("blocks",[])
+          if not 1<=len(blocks)<=10:raise SystemExit("Invalid ciphertext block count")
+          plaintext=[]
+          for block in blocks:
+              data=bytes.fromhex(block)
+              proc=subprocess.run(["openssl","pkeyutl","-decrypt","-inkey","/tmp/aegis-private.pem",
+                   "-pkeyopt","rsa_padding_mode:pkcs1"],input=data,
+                   stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+              plaintext.append(proc.stdout)
+          src=b"".join(plaintext).decode("utf-8")
+          from urllib.parse import urlparse
+          parsed=urlparse(src)
+          if parsed.scheme!="https" or not parsed.hostname or not parsed.hostname.endswith(".oaiusercontent.com"):
+              raise SystemExit("Refused unsupported download host")
+          # Don't log the URL, response headers or signed URL credentials.
+          request=urllib.request.Request(src,headers={"User-Agent":"AEGIS-archive-audit/1.0"})
+          with urllib.request.urlopen(request,timeout=180) as response:
+              with open("AEGIS_Upstox_Export.zip","wb") as file:
+                  size=0
+                  while True:
+                      chunk=response.read(1024*1024)
+                      if not chunk:break
+                      file.write(chunk)
+                      size+=len(chunk)
+          print(f"Encrypted handoff received, decrypted on runner and downloaded {size} bytes",flush=True)
+          if size<90000000:raise SystemExit("Downloaded archive smaller than expected")
+          PY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Audit ZIP CRC, metadata hashes, session hours and gaps
+        run: |
+          python aegis/audit_upstox_zip.py AEGIS_Upstox_Export.zip --output AEGIS_upstox_archive_audit.json
+          python - <<'PY'
+          import json
+          x=json.load(open("AEGIS_upstox_archive_audit.json"))
+          print("AUDIT SUMMARY",json.dumps({
+              "csv_counts":x.get("csv_counts"),
+              "hash_verified":x.get("sha_metadata_verified"),
+              "sha_metadata_mismatch":x.get("sha_metadata_mismatch"),
+              "contract_file_count_vs_manifest":x.get("contract_file_count_vs_manifest"),
+              "corrupted_csv":len(x.get("csv_corrupted_or_unreadable",[])),
+              "coverage_alerts":x.get("coverage_alerts")
+          },indent=2))
+          PY
+      - name: Install DuckDB, Arrow, NumPy and Pandas
+        run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'pyarrow>=17,<24' 'duckdb>=1.2,<2'
+      - name: Download checksum-pinned 2026 baseline option candles
+        run: python aegis/download_intraday_one.py --year 2026
+      - name: Download checksum-pinned historical cash-index support
+        run: python aegis/download_market_context.py
+      - name: Stitch Upstox option/futures ZIP with 2026 index and VIX
+        run: python aegis/stitch_upstox_2026.py --zip AEGIS_Upstox_Export.zip --support AEGIS_SUPPORT --output AEGIS_STITCH
+      - name: Execute 2026 AEGIS exploratory extended history, no bid-ask
+        shell: bash
+        run: |
+          export TZ=Asia/Kolkata
+          python aegis/backtest_v01.py --year 2026 \
+            --parquet "AEGIS_INTRADAY_2026/NIFTY_2026.parquet;AEGIS_STITCH/NIFTY_upstox_2026_jul_nov.parquet" \
+            --support AEGIS_SUPPORT --out AEGIS_2026_EXTENSION
+      - name: Verify replay files and generate transparent data/coverage summary
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,pathlib,pandas as pd
+          base=pathlib.Path("AEGIS_2026_EXTENSION")
+          summary=json.loads((base/"summary_2026.json").read_text())
+          ingestion=json.loads(pathlib.Path("AEGIS_STITCH/ingestion_report.json").read_text())
+          tr=pd.read_csv(base/"trades_2026.csv")
+          periods={
+            "original_holdout_window_to_april21":tr[tr.date<="2026-04-21"],
+            "new_april22_july21_window":tr[(tr.date>"2026-04-21")&(tr.date<"2026-07-22")],
+            "upstox_july22_nov03_window":tr[(tr.date>="2026-07-22")&(tr.date<="2026-11-04")]}
+          result={
+            "status":"executed exploratory candle-based backtest, not live-trading validated",
+            "not_pristine_holdout":True,
+            "data_availability":{"options_last":"2026-11-03",
+              "futures_last":"2026-10-27","index_and_vix_last":"2026-11-05"},
+            "2026_summary":summary,
+            "upstox_ingestion":{"csv_count":ingestion["option_csv_count"],
+                "rows_written":ingestion["option_rows_written"],
+                "metadata_sha_verified":ingestion["metadata_sha_verified"],
+                "index":ingestion["index"],
+                "derivative_row_quality":{
+                  k:ingestion[k] for k in ("option_rows_discarded_bad",
+                   "option_rows_discarded_session",
+                   "option_rows_discarded_dates")}},
+            "by_entry_period":{k:{"trade_count":len(v),
+              "net_pnl_rs":round(float(v.net_pnl_rs.sum()),2),
+              "last_entry":str(v.date.max()) if len(v) else None} for k,v in periods.items()},
+            "remaining_gaps":[
+               "2026-11-04 through 2026-11-05 option contracts not in expired ZIP",
+               "2026-10-28 through 2026-11-05 intraday futures not in expired ZIP",
+               "historical bid/ask and orderbook data not supplied",
+               "the v0.1 rules are simplified and still not a full institutional AEGIS reproduction",
+               "2026 previously inspected; not an untouched prospective holdout"]
+          }
+          pathlib.Path("AEGIS_2026_EXTENSION/AEGIS_REPLAY_2026_EVIDENCE.json").write_text(json.dumps(result,indent=2,default=str))
+          print("AEGIS_2026_REPLAY_EVIDENCE",json.dumps({
+            "2026_trades":summary["aegis"]["n"],
+            "2026_net_pnl":summary["aegis"]["net_pnl_rs"],
+            "by_entry_period":result["by_entry_period"],
+            "upstox_option_rows":ingestion["option_rows_written"],
+            "source_index_dates":summary["range"]
+          },default=str),flush=True)
+          PY
+      - name: Upload 2026 audit, source provenance and backtest trade ledger
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-upstox-2026-stitch-and-replay
+          path: |
+            AEGIS_upstox_archive_audit.json
+            AEGIS_STITCH/ingestion_report.json
+            AEGIS_2026_EXTENSION/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Archive sanitized audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-upstox-original-zip-audit
+          path: AEGIS_upstox_archive_audit.json
+          if-no-files-found: warn
+          retention-days: 30
