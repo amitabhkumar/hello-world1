@@ -69,11 +69,11 @@ Matched-trade adverse slippage (minimum 0.75 option points per side) at 0.25%, 0
 | Futures on Oct28–Nov05 | **Missing** | Retrieve then-active November monthly futures contract |
 | Fully aligned futures basis/forward IV | **Not in AEGIS v0.1 strategy logic** | Build separately and run controlled ablation |
 | Historical executable bid/ask, market depth | **Missing** | Licensed quotes or an explicit proxy; current results have modeled adverse spreads |
-| Full Jan–Sep 2024 intraday options | **Missing** | New source required for a true full two-year test |
+| Complete rolling two-year Nov06 2024–Nov05 2026 window | **Not yet demonstrated** | The source includes Nov–Dec 2024, but the simulator excludes 2024 Nov20–Dec31 due contract lot-size transitions; November 2026 active contracts also missing |
 | Institutional AEGIS original specification fidelity | **Not established** | Current A/B/C is simplified, uses 350-pt verticals, 15m exit checks |
 | Untouched prospective walk-forward | **Not established** | Freeze new rules then test genuinely unseen future sessions |
 | Production live trading readiness | **NO** | Data, quality, fills, net edge and drawdown gates not passed |
 
 The existing read-only supplement: `aegis/upstox_active_gap_patch.py` (private local Analytics Token, never stored) generates a small `AEGIS_Upstox_Active_Patch.zip`. `aegis/stitch_active_patch.py` validates source hashes and produces compatible active-derivative Parquet. Safety and smoke tests run on the isolated branch.
 
-**Next milestone:** integrate the small Nov04–05 active option / Oct28–Nov05 futures patch if accessible, rerun the same frozen rule set; then complete NSE daily cross-validation and make an independent decision on further methodological investment. Do not tune these observed 2026 outcomes and call them OOS.
+**Next milestone:** integrate the small Nov04–05 active option / Oct28–Nov05 futures patch if accessible, rerun the same frozen rule set; resolve the late-2024 contract lot-size transition (rolling two-year window begins in Nov2024, so Jan–Sep2024 is not required); then complete NSE daily cross-validation and make an independent decision on further methodological investment. Do not tune these observed 2026 outcomes and call them OOS.
