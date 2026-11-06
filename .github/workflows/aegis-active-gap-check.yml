@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/aegis-active-gap-check.yml'
       - 'aegis/upstox_active_gap_patch.py'
+      - 'aegis/stitch_active_patch.py'
       - 'aegis/upstox_market_export.py'
   workflow_dispatch:
 jobs:
@@ -16,13 +17,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
-      - name: Offline no-token test of active contract filtering and ZIP export
+      - run: python -m pip install 'pyarrow>=17,<24'
+      - name: Offline no-token test of active contract filtering, ZIP export, and Parquet ingestion
         shell: bash
         run: |
           python -m py_compile aegis/upstox_market_export.py aegis/upstox_active_gap_patch.py
           python - <<'PY'
           import datetime as dt, tempfile, pathlib, zipfile
           from aegis.upstox_active_gap_patch import run
+          from aegis.stitch_active_patch import convert_patch
           from aegis.upstox_market_export import ReadOnlyClient
           class FakeClient:
               request_count=0
@@ -44,8 +47,11 @@ jobs:
               run(FakeClient(),root,limit=0)
               assert list((root/"futures").rglob("*.csv"))
               assert list((root/"options").rglob("*.csv"))
-              with zipfile.ZipFile(pathlib.Path(tmp)/"AEGIS_Upstox_Active_Patch.zip") as z:
+              archive=pathlib.Path(tmp)/"AEGIS_Upstox_Active_Patch.zip"
+              with zipfile.ZipFile(archive) as z:
                   assert any("/options/" in p for p in z.namelist())
+              summary=convert_patch(archive,pathlib.Path(tmp)/"parquet")
+              assert summary["option_rows"]==1 and summary["futures_rows"]==1,summary
               fake=ReadOnlyClient("fake")
               for blocked in ("/v2/order/place","/v2/portfolio/long-term-holdings"):
                   try:fake.get(blocked);raise AssertionError("unsafe endpoint allowed")
