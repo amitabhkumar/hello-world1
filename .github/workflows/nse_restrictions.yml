@@ -32,6 +32,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Create isolated Python environment
         run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3-venv
           python3 -m venv /tmp/nse-venv
           /tmp/nse-venv/bin/python -m pip install playwright==1.56.0
           echo '/tmp/nse-venv/bin' >> "$GITHUB_PATH"
