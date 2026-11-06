@@ -234,7 +234,7 @@ def repair(client,source_path,output_path,report_path):
     report["status"]="complete" if not report["unresolved_dates"] else "incomplete"
     if len(merged) < len(info["records"]):
         raise AssertionError("Future records unexpectedly lost")
-    if not info["records"].items()<=merged.items():  # all prior timestamps + content must match
+    if not all(key in merged and merged[key]==value for key,value in info["records"].items()):  # old ticks unchanged
         raise AssertionError("Some prior market candles changed")
     # Preserve prior 285 options and all original raw files, except FUT csv+sidecar and manifest.
     raw=encode_csv(merged)
