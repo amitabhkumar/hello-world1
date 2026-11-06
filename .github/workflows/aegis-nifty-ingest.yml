@@ -1,0 +1,33 @@
+name: AEGIS NIFTY public data ingestion
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - 'aegis/**'
+      - '.github/workflows/aegis-nifty-ingest.yml'
+  workflow_dispatch:
+    inputs:
+      dataset:
+        type: choice
+        options: [daily, intraday, all]
+        default: daily
+        required: true
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+      - name: Download and checksum-verify public files
+        run: python aegis/download_public_nifty.py --only "${{ inputs.dataset || 'daily' }}"
+      - name: Save data and retrieval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-nifty-public-data
+          path: AEGIS_DATA/
+          if-no-files-found: error
+          retention-days: 7
