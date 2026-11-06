@@ -60,6 +60,55 @@ def fees(trade_date,qty,legs,entries,exits):
     stamp=buys*STAMP_BUY_RATE
     return dict(brokerage=brokerage,stt=sells*stt,exchange=exchange,sebi=sebi,gst=gst,stamp=stamp,total=brokerage+sells*stt+exchange+sebi+gst+stamp)
 
+
+# Diagnostic Greeks; constant assumed annual r=6.5% and dividend yield q=1.2%.
+# This is NOT a date-specific yield curve or exchange-quoted IV surface.
+RISK_FREE=0.065
+DIV_YIELD=0.012
+
+def n_cdf(x):
+    return .5*(1+math.erf(x/math.sqrt(2)))
+
+def bsm_value(s,k,t,vol,typ):
+    if s<=0 or k<=0 or t<=0 or vol<=0:return None
+    rt=math.sqrt(t)
+    d1=(math.log(s/k)+(RISK_FREE-DIV_YIELD+.5*vol*vol)*t)/(vol*rt)
+    d2=d1-vol*rt
+    if typ=="CE":
+        return s*math.exp(-DIV_YIELD*t)*n_cdf(d1)-k*math.exp(-RISK_FREE*t)*n_cdf(d2)
+    return k*math.exp(-RISK_FREE*t)*n_cdf(-d2)-s*math.exp(-DIV_YIELD*t)*n_cdf(-d1)
+
+def estimate_greeks(spot,k,days,typ,option_mid):
+    t=max(days,0.5)/365.0
+    lo=.005
+    hi=5.0
+    if option_mid<=0:return None
+    val0=bsm_value(spot,k,t,lo,typ)
+    val1=bsm_value(spot,k,t,hi,typ)
+    if val0 is None or val1 is None or option_mid<val0-.1 or option_mid>val1+.1:
+        return None
+    for _ in range(70):
+        v=(lo+hi)*.5
+        value=bsm_value(spot,k,t,v,typ)
+        if value<option_mid:lo=v
+        else:hi=v
+    vol=.5*(lo+hi)
+    sq=math.sqrt(t)
+    d1=(math.log(spot/k)+(RISK_FREE-DIV_YIELD+.5*vol*vol)*t)/(vol*sq)
+    d2=d1-vol*sq
+    phi=math.exp(-.5*d1*d1)/math.sqrt(2*math.pi)
+    disc_q=math.exp(-DIV_YIELD*t)
+    disc_r=math.exp(-RISK_FREE*t)
+    if typ=="CE":
+        delta=disc_q*n_cdf(d1)
+        theta=-spot*disc_q*phi*vol/(2*sq)-RISK_FREE*k*disc_r*n_cdf(d2)+DIV_YIELD*spot*disc_q*n_cdf(d1)
+    else:
+        delta=-disc_q*n_cdf(-d1)
+        theta=-spot*disc_q*phi*vol/(2*sq)+RISK_FREE*k*disc_r*n_cdf(-d2)-DIV_YIELD*spot*disc_q*n_cdf(-d1)
+    gamma=disc_q*phi/(spot*vol*sq)
+    vega=spot*disc_q*phi*sq/100.0
+    return {"iv":vol,"delta":delta,"gamma":gamma,"theta_per_day":theta/365.0,"vega_per_ivpt":vega}
+
 def load_market_context(root):
     spot=pd.read_csv(root/"NIFTY_5min_5yr_2021_2026.csv",parse_dates=["timestamp"])
     spot=spot[(spot.timestamp.dt.date>=START)&(spot.timestamp.dt.date<=END)].copy()
@@ -241,6 +290,10 @@ def run_one(con,candidates,days,year,benchmark=False):
             if r<=-stop:
                 exitkey,exitq,ret=ts,q,r;reason="stop_mark";break
         exitmid=[exitq[(t,k)] for t,k,s in legs]
+        leg_greeks=[estimate_greeks(c["spot"],k,(exp-d).days,typ,mid) for (typ,k,sgn),mid in zip(legs,entmid)]
+        valid_greeks=[(sgn,g) for (_,__,sgn),g in zip(legs,leg_greeks) if g is not None]
+        greek_summary={key:(round(lots*sum(sgn*g[key] for sgn,g in valid_greeks),5) if len(valid_greeks)==len(legs) else None) for key in ("delta","gamma","theta_per_day","vega_per_ivpt")}
+        mean_iv=(round(statistics.mean(g["iv"] for sgn,g in valid_greeks),5) if len(valid_greeks)==len(legs) else None)
         exits=[adverse(m,-s) for m,(_,__,s) in zip(exitmid,legs)]
         gross_pnl=lots*sum(s*(out-en) for (_,__,s),en,out in zip(legs,ent,exits))
         charged=fees(d,lots,legs,ent,exits)
@@ -251,6 +304,10 @@ def run_one(con,candidates,days,year,benchmark=False):
            "exit_value_points":round(sum(s*p for (_,__,s),p in zip(legs,exits)),3),
            "gross_pnl_rs":round(gross_pnl,2),"charges_rs":round(charged["total"],2),
            "net_pnl_rs":round(net,2),"return_on_debit":round(net/(initial_debit*lots),6),
+           "approx_entry_iv":mean_iv,"greeks_covered_all_legs":len(valid_greeks)==len(legs),
+           "approx_delta_units":greek_summary["delta"],"approx_gamma_units":greek_summary["gamma"],
+           "approx_theta_rs_per_calendar_day":greek_summary["theta_per_day"],"approx_vega_rs_per_1ivpt":greek_summary["vega_per_ivpt"],
+           "entry_raw_open_prices":json.dumps(entmid),"exit_raw_open_prices":json.dumps(exitmid),
            "brokerage_rs":round(charged["brokerage"],2),"stt_rs":round(charged["stt"],2),
            "exchange_rs":round(charged["exchange"],2),"gst_rs":round(charged["gst"],2),
            "slippage_policy":f"{SLIP_PCT:.3%} open or {SLIP_FLOOR:.2f} pts per leg per side whichever higher"}
@@ -311,6 +368,7 @@ def main():
       "aegis_vix_regime":{k:summarize([x for x in aegis if x["vix_regime"]==k]) for k in ("high","normal","unknown")},
       "aegis_gap_next_session_big":summarize([x for x in aegis if x.get("next_day_gap") is not None and abs(x["next_day_gap"])>=.0075]),
       "skips":pd.DataFrame(skips).reason.value_counts().to_dict() if skips else {},
+      "greeks_all_legs_count":sum(1 for x in aegis if x["greeks_covered_all_legs"]),
       "source":"NIFTY traded 1m option OHLC, 5m cash index, 2024-25 prior-day VIX",
       "model":f"one lot, {SLIP_PCT:.3%} premium or {SLIP_FLOOR:.2f} pt each execution leg, 20 rupees commission/leg/order, estimated taxes; no bid/ask",
       "lookahead":"Signal at 10:05, enter using 10:06 1-minute OPEN, 15m open-price monitoring; not an orderbook simulation",
