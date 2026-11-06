@@ -1,13 +1,18 @@
-name: NSE bulk and block published-route recovery
+name: NSE bulk and block deals
 on:
   workflow_dispatch:
     inputs:
       report_date:
-        description: 'Explicit historical equity session YYYY-MM-DD'
-        required: true
-        default: '2026-11-04'
+        description: 'Optional exact session YYYY-MM-DD; blank uses official calendar and publication gate'
+        required: false
+        type: string
   push:
     paths: ['.github/workflows/nse_deals_recovery.yml']
+  schedule:
+    - cron: '0 3 * * 1-5'
+    - cron: '0 11 * * 1-5'
+    - cron: '30 16 * * *'
+    - cron: '30 2 * * 6'
 permissions:
   contents: read
 concurrency:
@@ -27,19 +32,32 @@ jobs:
           apt-get install -y --no-install-recommends python3-venv
           python3 -m venv /tmp/deals-venv
           /tmp/deals-venv/bin/pip install playwright==1.56.0
+      - name: Test date selection and validation
+        run: PYTHONPATH=. /tmp/deals-venv/bin/python deals_checks/test_schedule.py
       - name: Fetch official CSV exports once
         env:
           REPORT_DATE: ${{ inputs.report_date }}
         shell: bash
         run: |
           cat > /tmp/deals.py <<'PY'
-          import csv, io, json, hashlib, os, pathlib, datetime
+          import csv, io, json, hashlib, os, pathlib, datetime, sys
+          from decimal import Decimal
+          from nse_automation.download import select_date, IST, CALENDAR_SOURCES
           from urllib.parse import urlencode
           from playwright.sync_api import sync_playwright
           out=pathlib.Path("nse-deals-output");out.mkdir(exist_ok=True)
-          day=datetime.date.fromisoformat(os.environ.get("REPORT_DATE") or "2026-11-04")
-          if day>datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5,minutes=30))).date(): raise ValueError("Future date")
-          manifest={"report_date":str(day),"route":"NSE published historicalOR CSV export; not a static archive","retry_policy":"NONE","datasets":[]}
+          manifest={"route":"NSE published historicalOR CSV export; not a static archive","retry_policy":"NONE","datasets":[],"commit":os.environ.get("GITHUB_SHA"),"run_id":os.environ.get("GITHUB_RUN_ID"),"attempt":os.environ.get("GITHUB_RUN_ATTEMPT"),"started_at":datetime.datetime.now(IST).isoformat(),"calendar_sources":CALENDAR_SOURCES,"drive_status":"NOT_TRANSFERRED","publication_timestamp":None}
+          try:
+           day,gate=select_date(datetime.datetime.now(IST),os.environ.get("REPORT_DATE") or None)
+           manifest.update(report_date=str(day),publication_status=gate)
+           if gate=="PENDING_PUBLICATION_WINDOW":
+            manifest["status"]=gate
+            (out/"manifest.json").write_text(json.dumps(manifest,indent=2))
+            print(json.dumps(manifest));sys.exit(0)
+          except Exception as e:
+           manifest.update(status="BLOCKED",error=str(e))
+           (out/"manifest.json").write_text(json.dumps(manifest,indent=2))
+           raise
           with sync_playwright() as p:
            browser=p.chromium.launch(headless=False,args=["--no-sandbox"])
            context=browser.new_context()
@@ -68,18 +86,27 @@ jobs:
               observed={row[datecols[0]].strip() for row in rows}
               expected={day.strftime("%d-%b-%Y"),day.strftime("%d-%m-%Y"),day.strftime("%d/%m/%Y"),str(day)}
               if not {x.upper() for x in observed}.issubset({x.upper() for x in expected}):raise ValueError("Source dates differ: "+str(observed))
+              required={"Date","Symbol","Security Name","Client Name","Buy / Sell","Quantity Traded","Trade Price / Wght. Avg. Price"}
+              if not required.issubset({k.strip() for k in rows[0]}):raise ValueError("Missing required deal columns")
+              for raw in rows:
+               row={k.strip():str(v or "").strip() for k,v in raw.items()}
+               if not row["Symbol"] or not row["Client Name"] or row["Buy / Sell"] not in ("BUY","SELL"):raise ValueError("Invalid identifier or side")
+               q=Decimal(row["Quantity Traded"].replace(",",""));price=Decimal(row["Trade Price / Wght. Avg. Price"].replace(",",""))
+               if not q.is_finite() or not price.is_finite() or q<=0 or q!=q.to_integral_value() or price<=0:raise ValueError("Invalid quantity or price")
               name=kind+"_"+day.strftime("%d%m%Y")+".csv";(out/name).write_bytes(body);r.update(file=name,status="VALIDATED_DATE_CSV",source_dates=sorted(observed))
              except Exception as e:r.update(status="BLOCKED",error=str(e))
              manifest["datasets"].append(r)
            except Exception as e:manifest["navigation_error"]=str(e)
            finally:
+            manifest["status"]="VALIDATED_DOWNLOADS" if len(manifest["datasets"])==2 and all(r["status"]=="VALIDATED_DATE_CSV" for r in manifest["datasets"]) else "PARTIAL_OR_BLOCKED"
+            manifest["finished_at"]=datetime.datetime.now(IST).isoformat()
             (out/"manifest.json").write_text(json.dumps(manifest,indent=2))
             browser.close()
           print(json.dumps(manifest))
           if len(manifest["datasets"])!=2 or any(r["status"]!="VALIDATED_DATE_CSV" for r in manifest["datasets"]):raise SystemExit(1)
           
           PY
-          xvfb-run --auto-servernum /tmp/deals-venv/bin/python /tmp/deals.py
+          PYTHONPATH="$GITHUB_WORKSPACE" xvfb-run --auto-servernum /tmp/deals-venv/bin/python /tmp/deals.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
