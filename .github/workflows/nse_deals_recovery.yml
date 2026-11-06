@@ -1,0 +1,88 @@
+name: NSE bulk and block published-route recovery
+on:
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: 'Explicit historical equity session YYYY-MM-DD'
+        required: true
+        default: '2026-11-04'
+  push:
+    paths: ['.github/workflows/nse_deals_recovery.yml']
+permissions:
+  contents: read
+concurrency:
+  group: nse-deals-recovery
+  cancel-in-progress: false
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.56.0-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated browser runtime
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv /tmp/deals-venv
+          /tmp/deals-venv/bin/pip install playwright==1.56.0
+      - name: Fetch official CSV exports once
+        env:
+          REPORT_DATE: ${{ inputs.report_date }}
+        shell: bash
+        run: |
+          cat > /tmp/deals.py <<'PY'
+          import csv, io, json, hashlib, os, pathlib, datetime
+          from urllib.parse import urlencode
+          from playwright.sync_api import sync_playwright
+          out=pathlib.Path("nse-deals-output");out.mkdir(exist_ok=True)
+          day=datetime.date.fromisoformat(os.environ.get("REPORT_DATE") or "2026-11-04")
+          if day>datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5,minutes=30))).date(): raise ValueError("Future date")
+          manifest={"report_date":str(day),"route":"NSE published historicalOR CSV export; not a static archive","retry_policy":"NONE","datasets":[]}
+          with sync_playwright() as p:
+           browser=p.chromium.launch(headless=False,args=["--no-sandbox"])
+           context=browser.new_context()
+           page=context.new_page()
+           try:
+            page.goto("https://www.nseindia.com/all-reports",wait_until="domcontentloaded",timeout=60000)
+            page.goto("https://www.nseindia.com/report-detail/display-bulk-and-block-deals",wait_until="domcontentloaded",timeout=60000)
+            page.locator("#HistBulkBlockDeals-download").wait_for(state="attached",timeout=30000)
+            js=context.request.get("https://www.nseindia.com/dist/js/sections/bulk-block-deals-short-selling.js",timeout=30000)
+            source=js.body();(out/"official_route.js").write_bytes(source)
+            if b"/api/historicalOR/bulk-block-short-deals" not in source:raise ValueError("Current official route not confirmed")
+            for kind in ("bulk_deals","block_deals"):
+             url="https://www.nseindia.com/api/historicalOR/bulk-block-short-deals?"+urlencode({"optionType":kind,"from":day.strftime("%d-%m-%Y"),"to":day.strftime("%d-%m-%Y"),"csv":"true"})
+             r={"dataset":kind,"url":url,"requested_date":str(day),"retrieval_time_utc":datetime.datetime.now(datetime.timezone.utc).isoformat()}
+             try:
+              response=context.request.get(url,timeout=60000)
+              body=response.body();r.update(http_status=response.status,bytes=len(body),sha256=hashlib.sha256(body).hexdigest())
+              if response.status!=200:raise ValueError("HTTP "+str(response.status))
+              text=body.decode("utf-8-sig")
+              if text.lstrip().startswith("<"):raise ValueError("HTML instead of CSV")
+              rows=list(csv.DictReader(io.StringIO(text)));r["rows"]=len(rows);r["fields"]=list(rows[0]) if rows else []
+              if not rows:raise ValueError("Empty CSV: no-deal status not independently confirmed")
+              datecols=[k for k in rows[0] if "date" in k.lower()]
+              if len(datecols)!=1:raise ValueError("Missing/ambiguous date field")
+              observed={row[datecols[0]].strip() for row in rows}
+              expected={day.strftime("%d-%b-%Y"),day.strftime("%d-%m-%Y"),day.strftime("%d/%m/%Y"),str(day)}
+              if not observed.issubset(expected):raise ValueError("Source dates differ: "+str(observed))
+              name=kind+"_"+day.strftime("%d%m%Y")+".csv";(out/name).write_bytes(body);r.update(file=name,status="VALIDATED_DATE_CSV",source_dates=sorted(observed))
+             except Exception as e:r.update(status="BLOCKED",error=str(e))
+             manifest["datasets"].append(r)
+           except Exception as e:manifest["navigation_error"]=str(e)
+           finally:
+            (out/"manifest.json").write_text(json.dumps(manifest,indent=2))
+            browser.close()
+          print(json.dumps(manifest))
+          if len(manifest["datasets"])!=2 or any(r["status"]!="VALIDATED_DATE_CSV" for r in manifest["datasets"]):raise SystemExit(1)
+          
+          PY
+          xvfb-run --auto-servernum /tmp/deals-venv/bin/python /tmp/deals.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nse-deals-${{ github.run_id }}-${{ github.run_attempt }}
+          path: nse-deals-output/
+          retention-days: 90
+          if-no-files-found: error
