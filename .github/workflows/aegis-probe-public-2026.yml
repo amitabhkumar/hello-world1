@@ -1,0 +1,23 @@
+name: AEGIS verify public 2026 NIFTY missing data
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-probe-public-2026.yml'
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: python aegis/probe_public_2026_gaps.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-public-2026-gap-sources
+          path: AEGIS_NEW_2026_SOURCES/
+          retention-days: 60
+          if-no-files-found: warn
