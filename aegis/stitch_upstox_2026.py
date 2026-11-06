@@ -73,6 +73,7 @@ def extract(zip_path, output, old_support):
     buffer=[]
     writer=None
     idx_bars={"NIFTY50":[],"INDIA_VIX":[]}
+    futures_rows=[]
     per_day=collections.Counter()
     bad_examples=[]
     def flush():
@@ -113,7 +114,9 @@ def extract(zip_path, output, old_support):
                     if typ not in ("CE","PE"):raise ValueError("Bad type "+name)
                     lot=int(metadata["lot_size"])
                     reports["option_csv_count"]+=1
-                else:reports["futures_csv_count"]+=1
+                else:
+                    reports["futures_csv_count"]+=1
+                    lot=int(metadata["lot_size"])
             if kind=="indices":
                 if "/NIFTY50/" in name.upper():key="NIFTY50"
                 elif "/INDIA_VIX/" in name.upper():key="INDIA_VIX"
@@ -147,6 +150,12 @@ def extract(zip_path, output, old_support):
                           "lot_size":lot,"source":"upstox_expired_contract_1m"})
                         per_day[str(d)]+=1
                         if len(buffer)>=75000:flush()
+                    elif kind=="futures":
+                        if CUTOVER<=d<=END and d<=exp and is_session(ts,"options"):
+                            futures_rows.append({"timestamp":ts,"date":d,"expiry":exp,
+                                 "open":o,"high":h,"low":l,"close":c,
+                                 "volume":float(row.get("volume") or 0),
+                                 "open_interest":float(row.get("oi") or 0),"lot_size":lot})
                     elif kind=="indices":
                         if CUTOVER<=d<=END:
                             if is_session(ts,"indices"):
@@ -158,6 +167,12 @@ def extract(zip_path, output, old_support):
     if writer is not None:writer.close()
     else:raise ValueError("No valid option candle data produced")
     reports["options_dates"]=dict(sorted(per_day.items()))
+    if futures_rows:
+        future_table=pa.Table.from_pylist(futures_rows)
+        pq.write_table(future_table,output/"NIFTY_futures_upstox_2026.parquet",
+             compression="zstd")
+    reports["futures_rows_written"]=len(futures_rows)
+    reports["futures_observed_last"]=str(max((x["date"] for x in futures_rows),default="none"))
     reports["bad_examples"]=bad_examples
     spot_base_file=support/"NIFTY_5min_5yr_2021_2026.csv"
     if not spot_base_file.exists():raise FileNotFoundError(spot_base_file)
