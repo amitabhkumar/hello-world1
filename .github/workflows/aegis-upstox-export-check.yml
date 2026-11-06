@@ -1,0 +1,43 @@
+name: Validate AEGIS secure Upstox exporter
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-upstox-export-check.yml'
+  workflow_dispatch:
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile and test offline, without any credentials
+        shell: bash
+        run: |
+          python -m py_compile aegis/upstox_market_export.py
+          python aegis/upstox_market_export.py --help
+          python - <<'PY'
+          import datetime as dt
+          from aegis.upstox_market_export import date_windows, convert, ReadOnlyClient
+          assert list(date_windows(dt.date(2026,10,20),dt.date(2026,10,27)))==[
+             (dt.date(2026,10,20),dt.date(2026,10,26)),
+             (dt.date(2026,10,27),dt.date(2026,10,27))
+          ]
+          assert len(convert([["x",1,2,0,1,4]] )[0])==7
+          test=ReadOnlyClient("never-a-real-token")
+          try:
+              test.get("/v2/order/place")
+              raise AssertionError("Order URL incorrectly allowed")
+          except ValueError:
+              pass
+          try:
+              test.get("/v2/portfolio/short-term-positions")
+              raise AssertionError("Positions URL incorrectly allowed")
+          except ValueError:
+              pass
+          print("Safe read-only endpoint tests succeeded")
+          PY
