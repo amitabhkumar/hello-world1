@@ -1,0 +1,44 @@
+name: AEGIS Nov 2026 single-trade attribution
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths: ['.github/workflows/aegis-active-trade-attribution.yml']
+  workflow_dispatch:
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42273407619
+          name: AEGIS_2026_ACTIVE_PATCH_FULL_INTEGRATED_EVIDENCE
+          path: EVIDENCE
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trace newly available derivatives trade and coverage gates
+        run: |
+          python - <<'PY'
+          import csv,json,pathlib
+          root=pathlib.Path("EVIDENCE")
+          report=json.loads((root/"AEGIS_2026_WITH_ACTIVE_PATCH/AEGIS_ACTIVE_PATCH_REPLAY_COMPARISON.json").read_text())
+          audit=json.loads((root/"AEGIS_active_patch_audit.json").read_text())
+          ledger=list(csv.DictReader((root/"AEGIS_2026_WITH_ACTIVE_PATCH/trades_2026.csv").open()))
+          for key in report.get("newly_present_trade_keys",[]):
+              rows=[r for r in ledger if [r["date"],r["mode"],r["expiry"],r["legs"]]==key]
+              fields=("date","expiry","mode","legs","exit_timestamp","exit_reason",
+                 "net_pnl_rs","gross_pnl_rs","charges_rs","entry_debit_rs","approx_entry_iv")
+              for r in rows:
+                  print("AEGIS_NEWLY_ENABLED_TRADE",json.dumps({k:r.get(k) for k in fields}))
+          print("AEGIS_EXPECTED_FUTURES_DATES",json.dumps(audit["index_trading_dates_2026_oct28_nov05"]))
+          print("AEGIS_UNCOVERED_FUTURES_DATES",json.dumps(audit["futures_missing_dates_vs_original_index"]))
+          print("AEGIS_MISSING_NOV_04_05_OPTION_DATES",json.dumps(audit["options_missing_dates_nov04_nov05"]))
+          print("AEGIS_TRADE_COMPARISON",json.dumps({
+            k:report[k] for k in ("prior","updated","delta_net_pnl","new_trade_entry_dates_nov04_nov05")
+          }))
+          PY
