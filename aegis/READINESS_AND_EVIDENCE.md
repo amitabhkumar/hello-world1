@@ -100,3 +100,14 @@ The active-contract patch enabled **one additional strategy trade worth +₹22,5
 The existing read-only supplement: `aegis/upstox_active_gap_patch.py` (private local Analytics Token, never stored) generates a small `AEGIS_Upstox_Active_Patch.zip`. `aegis/stitch_active_patch.py` validates source hashes and produces compatible active-derivative Parquet. Safety and smoke tests run on the isolated branch.
 
 **Next milestone:** audit options data availability beyond simple presence, recover Oct28–30 futures separately if intraday futures basis is required, resolve the late-2024 contract lot-size transition, NSE session/cost validation and genuine untouched future holdout. **Do not optimize on these already-observed 2026 results and describe them as out-of-sample.**
+
+
+### 7 November 2026 — root-cause fix for the remaining NIFTY futures gap
+
+**Confirmed code defect:** In `upstox_active_gap_patch.py`, `regular_fo_bar()` compared every candle against the *options* start date (2026-11-02), including the November futures contract whose requested start date was 2026-10-28. The Oct28–30 futures candles were therefore excluded by local post-download filtering, regardless of whether Upstox returned them. The export reported success because it checked API errors and nonempty CSV files but not per-day completeness.
+
+- Corrected code passes the individual contract start date into the session validator, with an explicit Oct28/Oct30 futures regression test (commit d983919d52b058deb6f541492f1a904aa5929b7e).
+- Added `aegis/aegis_repair_oct_futures.py`, standalone Python read-only script. It opens the existing small active-market-data ZIP, identifies the exact Nov23 NIFTY future key from the checksum-verified sidecar, retrieves only Oct28–30 1-minute candles, merges without altering earlier records or options CSVs, verifies exactly 385 timestamp-distinct minute bars on every required trading date Oct28–Nov05, and saves a new `AEGIS_Upstox_Active_Patch_Repaired.zip`. On an incomplete response it produces a token-free diagnostic report and DOES NOT claim completion.
+- Offline integration/regression/standalone tests passed: https://github.com/amitabhkumar/hello-world1/actions/runs/42277113892
+- **Status:** script validated on synthetic market-data responses; the three real trading-day rows must still be authenticated through the user's private local Upstox Analytics Token. Do not claim the gap filled until the repaired archive is uploaded and audited.
+- There is no need to re-export 285 options or the previous 95 MB archive. Futures do not enter the current v0.1 option-candle engine; this patch improves dataset completeness for later futures/basis studies.
