@@ -4,6 +4,7 @@ on:
     branches: [aegis-nifty-backtest]
     paths:
       - '.github/workflows/aegis-upstox-export-check.yml'
+      - 'aegis/upstox_market_export.py'
   workflow_dispatch:
 jobs:
   lint-and-test:
@@ -22,12 +23,14 @@ jobs:
           python aegis/upstox_market_export.py --help
           python - <<'PY'
           import datetime as dt
-          from aegis.upstox_market_export import date_windows, convert, ReadOnlyClient
+          from aegis.upstox_market_export import date_windows, convert, ReadOnlyClient, regular_session_bar
           assert list(date_windows(dt.date(2026,10,20),dt.date(2026,10,27)))==[
              (dt.date(2026,10,20),dt.date(2026,10,26)),
              (dt.date(2026,10,27),dt.date(2026,10,27))
           ]
           assert len(convert([["x",1,2,0,1,4]] )[0])==7
+          assert regular_session_bar("2026-10-27T15:29:00+05:30")
+          assert not regular_session_bar("2026-10-27T15:39:00+05:30")
           test=ReadOnlyClient("never-a-real-token")
           try:
               test.get("/v2/order/place")
