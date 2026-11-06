@@ -43,12 +43,37 @@ REG1_MAPS = {
  "Long_Term_Additional_Surveillance_Measure (Long Term ASM)": {"100":"Not under LTASM", **{str(n):"LTASM stage " + str(n) for n in (1,2,3,4)}},
  "Short_Term_Additional_Surveillance_Measure (Short Term ASM)": {"100":"Not under STASM", "1":"STASM stage 1", "2":"STASM stage 2"},
  "ESM": {"100":"Not applicable", "1":"ESM stage 1", "2":"ESM stage 2"}}
-def interpret_reg1(payload):
+
+REG1_EFFECTIVE_SOURCE = "https://nsearchives.nseindia.com/content/circulars/SURV67801.pdf#page=81"
+REG1_MAPS.update({'Nse Exclusive': {'Y': 'NSE exclusive', 'N': 'Not NSE exclusive'}, 'Unsolicited_SMS': {'100': 'Not under SMS', '0': 'Information list', '1': 'Current watchlist'}, 'Insolvency_Resolution_Process(IRP)': {'100': 'Not under IRP', '0': 'Corporate disclosure received', '1': 'IBC stage I', '2': 'IBC stage II'}, 'Default': {'100': 'Not under default disclosure', '0': 'Default disclosure', '1': 'Default surveillance measure'}, 'ICA': {'100': 'Not under ICA', '0': 'ICA identified', '1': 'ICA surveillance measure'}, 'Social Media Platforms': {'100': 'Not identified', '2': 'Surveillance measure list'}, 'Pledge': {'100': 'Not identified', '1': 'Identified'}, 'Add-on_PB': {'100': 'Not identified', '1': 'Identified'}, 'Total Pledge': {'100': 'Not identified', '1': 'Identified'}, 'Loss making': {'100': 'Not under category', '0': 'Under category'}, 'The Overall encumbered share in the scrip is more than 50 Percent.': {'100': 'Not under category', '0': 'Under category'}, 'Under BZ/SZ Series': {'100': 'Not under category', '0': 'Under category'}, 'Company has failed to pay Annual listing fee': {'100': 'Not under category', '0': 'Under category'}, 'Derivative contracts in the scrip to be moved out of F and O': {'100': 'Not under category', '0': 'Under category'}, 'Scrip PE is greater than 50 (4 trailing quarters)': {'100': 'Not under category', '0': 'Under category'}, 'EPS in the scrip is zero (4 trailing quarters)': {'100': 'Not under category', '0': 'Under category'}, 'Less than 100 unique PAN traded in previous 30 days': {'100': 'Not under category', '0': 'Under category'}, 'Mandatory Market making period in SME scrip is over': {'100': 'Not under category', '0': 'Under category'}, 'SME scrip is not regularly traded': {'100': 'Not under category', '0': 'Under category'}, 'Close to Close price movement greater than 25perc in previous 5 trading days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 40perc in previous 15 trading days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 100perc in previous 60 trading Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 25perc in previous 15 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 50perc in previous 1 month': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 90perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 25perc in previous 1 month': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 50perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 200perc in previous 365 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 75perc in previous 6 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 100perc in previous 365 days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 75perc in previous 1 month': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 150perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 75perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 300perc in previous 365 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 100perc in previous 6 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 200perc in previous 365 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 150perc in previous 12 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}})
+
+def next_session(report_date):
+    d = report_date + timedelta(days=1)
+    while not is_session(d):
+        d += timedelta(days=1)
+    return d
+
+def interpret_reg1(payload, report_date=None):
     rows = list(csv.DictReader(io.StringIO(payload.decode("utf-8-sig"))))
-    return [dict(symbol=r.get("Symbol"), series=r.get("Series"),
-        indicators={k:dict(raw=r.get(k), meaning=v.get(r.get(k," ").strip(),"Unknown")) for k,v in REG1_MAPS.items()},
-        trading_access="Unknown", effective_trading_date=None,
-        reason="Code labels only. Effective date and applicable session restrictions require dated notices.") for r in rows]
+    effective = next_session(report_date).isoformat() if report_date else None
+    output = []
+    identifiers = {"ScripCode", "Symbol", "Series"}
+    for r in rows:
+        indicators = {}
+        for k, raw in r.items():
+            if k in identifiers:
+                continue
+            value = (raw or "").strip()
+            meaning = REG1_MAPS.get(k, {}).get(value, "Unknown")
+            if k.startswith("Filler"):
+                meaning = "Reserved field; not interpreted" if value in ("", "100") else "Unknown"
+            indicators[k] = dict(raw=raw, meaning=meaning)
+        output.append(dict(symbol=r.get("Symbol"), series=r.get("Series"),
+            indicators=indicators, report_date=report_date.isoformat() if report_date else None,
+            effective_trading_date=effective, effective_date_source=REG1_EFFECTIVE_SOURCE,
+            trading_access="Unknown", snapshot_status=REG1_MAPS["Status"].get(r.get("Status"),"Unknown"),
+            reason="Effective REG1 labels verified; permission additionally requires current session, band and dated restriction notices."))
+    return output
 
 def validate(payload, name):
     if not PATTERN.fullmatch(name): raise ValueError("Unexpected filename")
@@ -137,7 +162,8 @@ def main():
                         item.update(validate(data,name),source_url=source,retrieved_at=datetime.now(IST).isoformat(),status="VALIDATED_DOWNLOAD")
                         tmp.rename(out/name)
                         if name.startswith("REG1_"):
-                            interpreted=interpret_reg1(data)
+                            interpreted=interpret_reg1(data, filedate(name))
+                            item.update(effective_date=next_session(filedate(name)).isoformat(), effective_date_source=REG1_EFFECTIVE_SOURCE)
                             (out/"reg1_interpreted.json").write_text(json.dumps(dict(source=REG1_DEFINITION_SOURCE,records=interpreted),indent=2))
                     except Exception as e:
                         item.update(status="FAILED",error=type(e).__name__+": "+str(e))
@@ -155,4 +181,5 @@ def main():
         print(json.dumps(m,indent=2))
     return exitcode
 if __name__=="__main__": sys.exit(main())
+
 
