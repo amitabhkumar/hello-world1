@@ -143,7 +143,8 @@ def audit(patch,original=None):
             and str(d) not in counts["options"]]
     manifestpaths=[name for name in names if name.endswith("AEGIS_active_patch_manifest.json")]
     if manifestpaths:
-        data=json.loads(z.read(sorted(manifestpaths)[0]))
+        with zipfile.ZipFile(patch) as manifest_archive:
+            data=json.loads(manifest_archive.read(sorted(manifestpaths)[0]))
         summary["embedded_manifest"]={k:data.get(k) for k in (
             "version","downloaded_contracts","files_written","reused_contracts",
             "empty_contracts","errors","warnings","api_requests","limit_reached")}
