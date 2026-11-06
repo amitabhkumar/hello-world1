@@ -1,0 +1,53 @@
+name: Validate AEGIS Upstox archive audit
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-zip-audit-tests.yml'
+      - 'aegis/audit_upstox_zip.py'
+  workflow_dispatch:
+jobs:
+  qa-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile offline ZIP QA and create controlled synthetic example
+        shell: bash
+        run: |
+          python -m py_compile aegis/audit_upstox_zip.py
+          python - <<'PY'
+          import csv,hashlib,io,json,zipfile
+          def sample(ts):
+              return "timestamp,open,high,low,close,volume,oi\n"+ts+",100,110,90,105,100,12\n"
+          with zipfile.ZipFile("synthetic_aegis.zip","w") as z:
+              for typ,expiry,timestamp in [
+                  ("options","2026-11-03","2026-11-02T15:39:00+05:30"),
+                  ("futures","2026-11-03","2026-11-02T15:39:00+05:30"),
+                  ("indices","NIFTY50","2026-11-02T15:29:00+05:30"),
+              ]:
+                  p=f"AEGIS_Upstox_Export/{typ}/{expiry}/test.csv"
+                  content=sample(timestamp).encode()
+                  z.writestr(p,content)
+                  if typ!="indices":
+                      z.writestr(p[:-4]+".json",json.dumps({"sha256_csv":hashlib.sha256(content).hexdigest()}))
+          with open("synthetic_manifest.json","w") as f:
+              json.dump({"downloaded_contract_files":2,"skipped_existing":0},f)
+          PY
+          python aegis/audit_upstox_zip.py synthetic_aegis.zip --manifest synthetic_manifest.json --output audit.json
+          python - <<'PY'
+          import json
+          data=json.load(open("audit.json"))
+          assert data["contract_file_count_vs_manifest"]["match"],data
+          assert data["sha_metadata_verified"]==2,data
+          assert data["csv_counts"]["options"]["outside_reference_session"]==0,data
+          assert data["csv_counts"]["futures"]["outside_reference_session"]==0,data
+          assert data["csv_counts"]["indices"]["outside_reference_session"]==0,data
+          assert len(data["coverage_alerts"])==4,data
+          print("Offline Upstox archive QA tests passed")
+          PY
