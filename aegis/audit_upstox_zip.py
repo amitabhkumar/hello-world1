@@ -33,14 +33,42 @@ def session_last(date,kind):
 def parse_stamp(x):
     return dt.datetime.fromisoformat(x.strip())
 
+def resolve_archive(archive=None):
+    """Locate a downloaded ZIP without relying on the shell's current directory.
+
+    The user's original Drive export is AEGIS_Upstox_Export.zip. Connector-backed
+    copies in this session can also be AEGIS_Upstox_Export_2.zip.
+    """
+    candidates=[]
+    if archive:
+        p=pathlib.Path(archive).expanduser()
+        candidates.append(p)
+        if not p.is_absolute():
+            candidates.extend([
+                pathlib.Path("/mnt/data")/p,
+                pathlib.Path.home()/"Downloads"/p,
+                pathlib.Path(__file__).resolve().parent/p
+            ])
+    else:
+        names=("AEGIS_Upstox_Export.zip","AEGIS_Upstox_Export_2.zip")
+        dirs=(pathlib.Path.cwd(),pathlib.Path("/mnt/data"),
+              pathlib.Path.home()/"Downloads",pathlib.Path(__file__).resolve().parent)
+        candidates.extend(d/name for d in dirs for name in names)
+    for candidate in candidates:
+        if candidate.is_file() and zipfile.is_zipfile(candidate):
+            return candidate.resolve()
+    locations=", ".join(str(p) for p in candidates)
+    raise SystemExit("AEGIS export ZIP not found, or does not have a valid ZIP header. "
+                     "Looked in: "+locations)
+
 def main():
     parser=argparse.ArgumentParser(description="Offline audit of AEGIS Upstox 2026 historical data ZIP")
-    parser.add_argument("archive",help="Path to AEGIS_Upstox_Export.zip")
+    parser.add_argument("archive",nargs="?",default=None,help="Optional ZIP path; auto-detects cwd and /mnt/data")
     parser.add_argument("--manifest",help="Optional downloaded AEGIS_upstox_export_manifest.json")
     parser.add_argument("--output",default="AEGIS_upstox_archive_audit.json")
     a=parser.parse_args()
-    arc=pathlib.Path(a.archive)
-    if not arc.exists():raise SystemExit(f"ZIP not found: {arc}")
+    arc=resolve_archive(a.archive)
+    print(f"ARCHIVE_SELECTED {arc} ({arc.stat().st_size} bytes)",flush=True)
     expected=json.loads(pathlib.Path(a.manifest).read_text(encoding="utf-8")) if a.manifest else None
     summary={"source_archive":arc.name,"zip_bytes":arc.stat().st_size,
         "requested_start":str(START),"requested_end":str(END),
@@ -66,6 +94,20 @@ def main():
     summary["zip_sha256"]=zip_hash.hexdigest()
     with zipfile.ZipFile(arc) as z:
         members=z.namelist()
+        if expected is None:
+            matches=[n for n in members
+                     if n.lower().replace("\\\\","/").endswith("/aegis_upstox_export_manifest.json")
+                     or n.lower()=="aegis_upstox_export_manifest.json"]
+            if matches:
+                try:
+                    expected=json.loads(z.read(matches[0]).decode("utf-8-sig"))
+                    summary["manifest_source"]="inside archive: "+matches[0]
+                    summary["provided_manifest"]={k:expected.get(k) for k in (
+                        "start","end","expiries_available","downloaded_contract_files",
+                        "skipped_existing","empty_contracts","errors","limits","api_request_count"
+                    )}
+                except (ValueError,UnicodeDecodeError):
+                    summary["manifest_source"]="found but could not parse embedded manifest"
         summary["archive_valid_directory"]=True
         summary["zip_members"]=len(members)
         member_set=set(members)
