@@ -1,0 +1,27 @@
+name: AEGIS fetch final publicly listed 2026 NIFTY options
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-extra-options-probe.yml'
+  workflow_dispatch:
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'pyarrow>=17,<24'
+      - run: python aegis/fetch_extra_public_options.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-extra-public-2026-options
+          path: AEGIS_EXTRA_PUBLIC_OPTIONS/
+          retention-days: 45
+          if-no-files-found: warn
