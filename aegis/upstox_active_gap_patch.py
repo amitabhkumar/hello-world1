@@ -74,13 +74,13 @@ def is_nifty(contract):
     return str(contract.get("trading_symbol", "")).upper().startswith("NIFTY ")
 
 
-def regular_fo_bar(ts, expiry=None):
+def regular_fo_bar(ts, expiry=None, first=OPT_START):
     """3-Aug-2026 change: F&O 09:15–15:39 minute starts until December."""
     try:
         t = dt.datetime.fromisoformat(str(ts))
         return (
             t.utcoffset() == IST
-            and OPT_START <= t.date() <= LAST
+            and first <= t.date() <= LAST
             and dt.time(9, 15) <= t.time().replace(tzinfo=None) <= dt.time(15, 39)
             and (expiry is None or t.date() <= expiry)
         )
@@ -301,7 +301,7 @@ def run(client, out, limit=0, wing=1200):
     out.mkdir(parents=True, exist_ok=True)
     manifest_path = out / "AEGIS_active_patch_manifest.json"
     manifest = {
-        "version": "standalone_v2",
+        "version": "standalone_v3_date_corrected",
         "source": "Upstox market-only active contract discovery + Historical Candle V3",
         "option_session_range": [str(OPT_START), str(LAST)],
         "future_session_range": [str(FUT_START), str(LAST)],
@@ -350,7 +350,7 @@ def run(client, out, limit=0, wing=1200):
                     str(row[0]): row
                     for row in raw
                     if valid_candle(row)
-                    and regular_fo_bar(row[0], expiry=expiry)
+                    and regular_fo_bar(row[0], expiry=expiry, first=first)
                     and first <= safe_date(row[0]) <= LAST
                 }
                 rows = [dedup[t] for t in sorted(dedup)]
@@ -407,6 +407,10 @@ def self_test():
     assert regular_fo_bar("2026-11-05T15:39:00+05:30")
     assert not regular_fo_bar("2026-11-05T15:40:00+05:30")
     assert not regular_fo_bar("2026-11-05T15:39:00+00:00")
+    assert regular_fo_bar("2026-10-28T09:15:00+05:30", first=FUT_START), "October futures silently dropped"
+    assert regular_fo_bar("2026-10-30T15:39:00+05:30", first=FUT_START)
+    assert not regular_fo_bar("2026-10-28T09:15:00+05:30", first=OPT_START)
+
     assert is_nifty({"segment": "NSE_FO", "underlying_symbol": "NIFTY"})
     assert not is_nifty({"segment": "NSE_FO", "underlying_symbol": "BANKNIFTY"})
     client = MarketOnlyClient("test-never-sent")
