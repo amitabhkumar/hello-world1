@@ -1,0 +1,56 @@
+name: AEGIS NIFTY historical-options data quality audit
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-data-audit.yml'
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2024, 2025, 2026]
+        kind: [daily, intraday]
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout AEGIS research code
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install parquet reader
+        run: python -m pip install 'pyarrow>=17,<24'
+      - name: Fetch verified source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.kind == 'daily' && 'aegis-nifty-public-data' || format('aegis-nifty-intraday-{0}', matrix.year) }}
+          run-id: ${{ matrix.kind == 'daily' && '42155007613' || '42155340491' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: SOURCE
+      - name: Audit schema and full timestamp boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.kind }}" == "daily" ]]; then
+            FILE="SOURCE/historical_daily/NIFTY/NIFTY_${{ matrix.year }}.parquet"
+          else
+            FILE="SOURCE/NIFTY_${{ matrix.year }}.parquet"
+            if [[ ! -f "$FILE" ]]; then
+              FILE="SOURCE/upstox_intraday/NIFTY/NIFTY_${{ matrix.year }}.parquet"
+            fi
+          fi
+          python aegis/audit_parquet.py --file "$FILE" --year ${{ matrix.year }} --kind ${{ matrix.kind }}
+      - name: Preserve machine-readable audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-audit-${{ matrix.kind }}-${{ matrix.year }}
+          path: audit_results/
+          if-no-files-found: warn
+          retention-days: 7
