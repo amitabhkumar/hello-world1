@@ -18,7 +18,7 @@ Validation checks official HTTPS source, exact selected/downloaded filename, CSV
 ## Calendar selection (2026-11-05 revision)
 The collector uses the official 2026 NSE equity holiday snapshot, the January 15 amendment, February 1 Budget session and November 8 Muhurat session. Sources are in CALENDAR_SOURCES. Morning selects the preceding eligible session; 16:30 selects today but records publication pending until the configured 20:35 window; closed days select the latest eligible session. Missing required files never cause an older-date fallback. Dates outside 2026 fail explicitly, including a year rollover needing adjacent-year coverage. This snapshot must be revised for new exchange notices and the next year; it is not a live calendar subscription.
 
-Status, GSM, LTASM, STASM and ESM field labels are decoded from the official SURV76993 annexure. REG1 codes differ from REG_IND composite indicators. Unknown codes remain Unknown. This partial interpretation does not establish effective dates or permitted trading sessions; trading_access remains Unknown. The forthcoming ETF field is not silently activated.
+Status, GSM, LTASM, STASM and ESM field labels are decoded from the official SURV76993 annexure. REG1 codes differ from REG_IND composite indicators. Unknown codes remain Unknown. REG1 applies to the next eligible trading session, as explicitly stated in NSE/SURV/67801 page 81 (NSE/SURV/64924; corrigendum65097 retains this rule). All currently populated non-reserved fields are decoded. Reserved fillers are never silently interpreted as future fields. Unknown values remain Unknown. Effective REG1 status does not by itself establish permitted trading sessions; trading_access remains Unknown until all applicable notices and band evidence are reconciled. The forthcoming ETF field is not silently activated.
 
 Tests: PYTHONPATH=. python tests/test_nse_session_selection.py. Optional NSE_ARTIFACT_DIR validates an existing artifact. Tests cover weekend, holiday, special sessions, publication gate, month transition and fail-closed year coverage. Live deployment acceptance remains separate from unit tests.
 
@@ -27,3 +27,10 @@ GitHub artifact creation and Drive delivery are separate stages. The scheduled T
 
 ## Failure handling
 Preserve exact errors and prior decisions. No automatic download retries. An event timeout is not proof of an NSE server outage. A successful scheduled configuration is not evidence of future execution or Drive persistence.
+
+## Verification revision 06 November 2026
+Collector commit f60eb622fcebecb848cfb28fc1ff2d68cb2878f1 passed live run42145340389, artifact13469652564. Independent artifact digest and CSV hashes passed. All3227 REG1 records have effective date2026-11-06 and no unknown currently populated non-reserved codes. November6 report advances to November8 Muhurat; November9 advances past November10 holiday.
+
+Workflow uses version-matched official Playwright Python container to avoid installing Chromium and OS packages every run, with regression tests before acquisition. This is not a guarantee of punctual GitHub schedule dispatch. Preserve actual timestamps. GitHub documents delayed/dropped scheduled jobs under load. Keep SOP crons unchanged; no download retry loop.
+
+Open evidence: official historical price-band endpoint observed in the report page JavaScript returned an empty list for05–06Nov2026; no effective-date classification was inferred. The official GSM page states stages III/IV are weekly (Monday/first trading day), while the ESM FAQ specifies stageII periodic call auction on trading days. These framework facts require security-specific effective notices and overlapping restriction reconciliation before permission can be asserted. 2027 official equity calendar was not located in the reviewed sources; do not invent it.
