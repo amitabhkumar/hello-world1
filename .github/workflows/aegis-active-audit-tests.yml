@@ -1,0 +1,58 @@
+name: AEGIS active ZIP forensic audit offline tests
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-active-audit-tests.yml'
+      - 'aegis/audit_active_patch.py'
+  workflow_dispatch:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify active ZIP audit against synthetic gaps
+        run: |
+          python -m py_compile aegis/audit_active_patch.py
+          python - <<'PY'
+          import hashlib,json,zipfile
+          head="timestamp,open,high,low,close,volume,oi\n"
+          active=[
+            ("options","2026-11-09","2026-11-04","CE",24500),
+            ("options","2026-11-09","2026-11-05","PE",24500),
+            ("futures","2026-11-23","2026-11-02","FUT",0),
+            ("futures","2026-11-23","2026-11-03","FUT",0),
+            ("futures","2026-11-23","2026-11-04","FUT",0),
+            ("futures","2026-11-23","2026-11-05","FUT",0),
+          ]
+          with zipfile.ZipFile("patch-smoke.zip","w") as z:
+              for i,(kind,expiry,date,typ,strike) in enumerate(active):
+                  path=f"AEGIS_Upstox_Active_Patch/{kind}/{expiry}/{i}.csv"
+                  data=(head+date+"T15:39:00+05:30,100,110,90,105,10,5\n").encode()
+                  z.writestr(path,data)
+                  z.writestr(path[:-4]+".json",json.dumps({"sha256_csv":hashlib.sha256(data).hexdigest(),
+                       "expiry":expiry,"instrument_type":typ,"lot_size":65,"strike_price":strike,"rows":1}))
+              z.writestr("AEGIS_Upstox_Active_Patch/AEGIS_active_patch_manifest.json",
+                    json.dumps({"version":"standalone_v2","downloaded_contracts":6,"empty_contracts":0,
+                       "errors":[],"warnings":[],"limit_reached":False}))
+          days=["2026-10-28","2026-10-29","2026-10-30","2026-11-02","2026-11-03","2026-11-04","2026-11-05"]
+          with zipfile.ZipFile("original-smoke.zip","w") as z:
+              data=head+"".join(d+"T09:15:00+05:30,100,110,90,105,10,5\n" for d in days)
+              z.writestr("AEGIS_Upstox_Export/indices/NIFTY50/a.csv",data)
+          PY
+          python aegis/audit_active_patch.py --patch patch-smoke.zip --original original-smoke.zip --out result.json
+          python - <<'PY'
+          import json
+          r=json.load(open("result.json"))
+          assert r["status"]=="integrity_pass",r
+          assert r["sha256_csv_passed"]==6,r
+          assert r["options"]["rows"]==2,r
+          assert r["futures"]["rows"]==4,r
+          assert r["futures_missing_dates_vs_original_index"]==["2026-10-28","2026-10-29","2026-10-30"],r
+          assert r["options_missing_dates_nov04_nov05"]==[],r
+          print("AEGIS ACTIVE ZIP AUDIT TEST PASSED")
+          PY
