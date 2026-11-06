@@ -196,7 +196,7 @@ class ReadOnlyClient:
         results=[]
         for page in range(1,6):
             x=self.get("/v2/instruments/search",{
-                "query":"NIFTY","exchanges":"NSE","segments":"FO",
+                "query":"NIFTY FUT","exchanges":"NSE","segments":"FO",
                 "expiry":"current_month","page_number":page,"records":30})
             if not isinstance(x,list):raise ValueError("Unexpected instrument search response")
             results += [r for r in x
