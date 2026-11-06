@@ -1,0 +1,99 @@
+{
+  "id": "20261106_NSE_RECOVERY_R004",
+  "status": "PARTIAL_NOT_ALL_ISSUES_RESOLVED",
+  "recovery_commit": "96e985d3c630db60ccb8c112ace729d6e19d5d88",
+  "run": 42181259717,
+  "artifact": 13485611650,
+  "artifact_sha256": "1d7c6940f6611dcdd39fd93b2afcd9d40cfa67f7e3c19f1992f71c89df318e5f",
+  "scope": "Public acquisition evidence only; no private project locations or forecasts",
+  "verified_by_runner": [
+    {
+      "file": "sec_bhavdata_full_04112026.csv",
+      "rows": 3553,
+      "bytes": 402256,
+      "sha256": "eba68f9e211dcf5b2e349acdf58240dcb06e2fc92b30dc1aafdc15b1efc3df47"
+    },
+    {
+      "file": "sec_bhavdata_full_05112026.csv",
+      "rows": 3567,
+      "bytes": 405178,
+      "sha256": "f9ba221651f4983c539589c0e62138522affb8aa3de7fece7fd1242d802b9147"
+    },
+    {
+      "file": "ind_close_all_05112026.csv",
+      "rows": 167,
+      "bytes": 17681,
+      "sha256": "480ed7d2619b7b5bfaa094657afd1308860aec7a345d9a5b627efa14b715c0b3"
+    }
+  ],
+  "special_session": {
+    "date": "2026-11-08",
+    "source": "https://nsearchives.nseindia.com/content/circulars/CMTR76941.pdf",
+    "source_date": "2026-10-19",
+    "timezone": "Asia/Kolkata",
+    "normal_open": "14:20",
+    "cas_continuous_close": "15:15",
+    "non_cas_close": "15:30",
+    "cas_matching": [
+      "15:30",
+      "15:35"
+    ],
+    "post_close": [
+      "15:50",
+      "16:00"
+    ],
+    "illiquid_call_auction": [
+      "14:25",
+      "15:10"
+    ],
+    "status": "SOURCE_TIMETABLE_VERIFIED; not a deployed clock-based permission evaluator"
+  },
+  "blockers": [
+    {
+      "item": "Local execution and file transfer",
+      "error": "No usable execution environment is available",
+      "effect": "No independent local ZIP rehash, Excel generation, Drive upload/readback or calculation reconstruction completed this turn",
+      "needed": "Restore workspace, then materialize artifact and compare all hashes"
+    },
+    {
+      "item": "Complete band snapshot effective dates",
+      "attempt": "Official-source searches for sec_list and sme_bands_complete applicability",
+      "result": "No definitive general snapshot date instruction retrieved",
+      "needed": "Official specification or dated per-security band notices covering snapshot"
+    },
+    {
+      "item": "Full overlapping restrictions and ESM I activation",
+      "needed": "Dated notices, inclusion dates and all applicable framework rules; current snapshot alone does not prove activation dates",
+      "status": "PENDING"
+    },
+    {
+      "item": "Historical calculations",
+      "status": "PENDING_RECONSTRUCTION",
+      "needed": "Comparable prior20/50/52week series, corporate-action checks, issuer/series mapping; recovered two sessions are not full history"
+    },
+    {
+      "item": "Announcement pagination and ownership coverage",
+      "status": "PENDING",
+      "needed": "Date-windowed collection, pagination/stability totals, original material attachments and deal records"
+    },
+    {
+      "item": "2027 calendar",
+      "status": "OFFICIAL_SOURCE_NOT_LOCATED",
+      "needed": "Official2027equity holidays and special-session notices; retain explicit fail-closed behavior"
+    },
+    {
+      "item": "Scheduled delivery",
+      "status": "FUTURE_EXECUTION_UNVERIFIED",
+      "needed": "Observe actual scheduled runs and matching Drive receipts; do not credit push acceptance as schedule punctuality"
+    }
+  ],
+  "resume": [
+    "Reload authoritative SOP and latest private project records using authorized connectors",
+    "Fetch artifact13485611650; verify ZIP integrity and expected hash, then CSV hashes/rowdates",
+    "Persist needed files to authorized Incoming and fetch back exact bytes/parents; append Logs receipt and dated actual XLSX checklist",
+    "Reconstruct lost calculations as new retrospective outputs; never overwrite or credit original forecasts",
+    "Complete remaining evidence and code tests before claiming all SOP requirements resolved"
+  ],
+  "background_work": "None promised; this is a durable incomplete checkpoint",
+  "retry_policy": "No download retry loop"
+}
