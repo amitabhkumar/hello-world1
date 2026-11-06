@@ -51,3 +51,22 @@ jobs:
           assert len(data["coverage_alerts"])==4,data
           print("Offline Upstox archive QA tests passed")
           PY
+          # Reproduce the user's real archive basename and omit every CLI path.
+          cp synthetic_aegis.zip AEGIS_Upstox_Export.zip
+          python - <<'PY'
+          import json,zipfile
+          with zipfile.ZipFile("AEGIS_Upstox_Export.zip","a") as archive:
+              archive.writestr(
+                  "AEGIS_Upstox_Export/AEGIS_upstox_export_manifest.json",
+                  json.dumps({"downloaded_contract_files":2,"skipped_existing":0})
+              )
+          PY
+          python aegis/audit_upstox_zip.py --output autodetected.json
+          python - <<'PY'
+          import json
+          report=json.load(open("autodetected.json"))
+          assert report["source_archive"]=="AEGIS_Upstox_Export.zip",report
+          assert report["contract_file_count_vs_manifest"]["match"],report
+          assert report["manifest_source"].startswith("inside archive"),report
+          print("Archive auto-location and embedded-manifest tests passed")
+          PY
