@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,6 +22,27 @@ jobs:
           openssl pkey -in /tmp/aegis-private.pem -pubout -out /tmp/aegis-public.pem
           openssl rsa -pubin -in /tmp/aegis-public.pem -modulus -noout | sed 's/^Modulus=/AEGIS_RSA_MODULUS=/'
           echo 'PRIVATE KEY IS IN THE RUNNER ONLY'
+      - name: Publish ephemeral public modulus, never the private key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,subprocess,base64,json,urllib.request
+          raw=subprocess.check_output(["openssl","rsa","-pubin","-in","/tmp/aegis-public.pem","-modulus","-noout"],text=True)
+          modulus=raw.strip().split("=",1)[1]
+          payload=json.dumps({"run_id":os.environ["GITHUB_RUN_ID"],"modulus_hex":modulus,
+              "exponent":65537,"scheme":"RSA-PKCS1v1_5-ephemeral"})
+          encoded=base64.b64encode(payload.encode()).decode()
+          body=json.dumps({"message":"Ephemeral public key for encrypted market-data handoff",
+               "content":encoded,"branch":"aegis-nifty-backtest"})
+          path="aegis/_private_handoff/pubkey_"+os.environ["GITHUB_RUN_ID"]+".json"
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/"+path
+          req=urllib.request.Request(url,data=body.encode(),method="PUT",
+                headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                  "Accept":"application/vnd.github+json","Content-Type":"application/json"})
+          with urllib.request.urlopen(req,timeout=30) as res:
+              print("Ephemeral public key published:",path,flush=True)
+          PY
       - name: Wait for encrypted one-time file transfer and decrypt
         run: |
           python - <<'PY'
