@@ -1,0 +1,158 @@
+name: AEGIS transfer-safe minute archives
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-minute-parts.yml'
+  workflow_dispatch:
+jobs:
+  split:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2025, 2026]
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Retrieve verified previous options dataset
+        uses: actions/download-artifact@v4
+        with:
+          name: aegis-nifty-intraday-${{ matrix.year }}
+          run-id: 42155340491
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: SOURCE
+      - name: Check SHA256 and split into transfer-safe parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, pathlib, hashlib, json, sys
+          year=int(os.environ['YEAR'])
+          expected={2025:'33c2525b57ba442cfabeaebfc63ace63d0292e8f69474d5ea1541b75c9546972',2026:'bae9943b2fa99ee9c1214fb7c695b84f9f661a050a5cd04d9c5c2ffc7bc59f73'}[year]
+          src=list(pathlib.Path('SOURCE').rglob(f'NIFTY_{year}.parquet'))
+          assert len(src)==1, f'Expected one source: {src}'
+          src=src[0]
+          out=pathlib.Path('PARTS');out.mkdir(exist_ok=True)
+          chunk_size=75000000
+          parts=[];master=hashlib.sha256()
+          with src.open('rb') as f:
+              for n in range(30):
+                  data=f.read(chunk_size)
+                  if not data: break
+                  master.update(data)
+                  part=out/f'NIFTY_{year}.parquet.part-{n:02d}'
+                  part.write_bytes(data)
+                  parts.append(dict(file=part.name,size=len(data),sha256=hashlib.sha256(data).hexdigest()))
+          digest=master.hexdigest()
+          assert digest==expected, f'Checksum does not match {expected}: {digest}'
+          (out/f'NIFTY_{year}_PARTS_MANIFEST.json').write_text(json.dumps({'year':year,'original_file':f'NIFTY_{year}.parquet','original_size':src.stat().st_size,'original_sha256':digest,'chunk_size':chunk_size,'parts':parts},indent=2))
+          print(json.dumps({'year':year,'bytes':src.stat().st_size,'parts':len(parts),'sha256':digest}))
+          PY
+        env:
+          YEAR: ${{ matrix.year }}
+      - name: Upload checksum and assembly manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-manifest
+          path: PARTS/NIFTY_${{ matrix.year }}_PARTS_MANIFEST.json
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-00
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-00
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-01
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-01
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-02
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-02
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-03
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-03
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-04
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-04
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-05
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-05
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-06
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-06
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 07
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-07
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-07
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 08
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-08
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-08
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 09
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-09
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-09
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 10
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-10
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-10
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+      - name: Upload part 11
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-minute-${{ matrix.year }}-part-11
+          path: PARTS/NIFTY_${{ matrix.year }}.parquet.part-11
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
