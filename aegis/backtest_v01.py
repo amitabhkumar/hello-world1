@@ -18,8 +18,8 @@ EXCH_RATE=0.0003503
 GST_RATE=0.18
 STAMP_BUY_RATE=0.00003
 SEBI_RATE=0.000001
-SLIP_PCT=0.0075    # per side of option candle open
-SLIP_FLOOR=0.75    # option index points, each leg, each side
+SLIP_PCT=float(os.environ.get("AEGIS_SLIP_PCT", "0.0075"))    # per side of option candle open
+SLIP_FLOOR=float(os.environ.get("AEGIS_SLIP_FLOOR", "0.75"))    # option index points, each leg, each side
 CAPITAL=5_000_000.0
 RISK_CAP_PER_TRADE=0.01*CAPITAL
 MODES={"A":{"take":0.40,"stop":0.35,"days":2},
@@ -253,7 +253,7 @@ def run_one(con,candidates,days,year,benchmark=False):
            "net_pnl_rs":round(net,2),"return_on_debit":round(net/(initial_debit*lots),6),
            "brokerage_rs":round(charged["brokerage"],2),"stt_rs":round(charged["stt"],2),
            "exchange_rs":round(charged["exchange"],2),"gst_rs":round(charged["gst"],2),
-           "slippage_policy":"0.75% open or 0.75 pts per leg per side whichever higher"}
+           "slippage_policy":f"{SLIP_PCT:.3%} open or {SLIP_FLOOR:.2f} pts per leg per side whichever higher"}
         trades.append(trade)
         busy_until=dt.datetime.strptime(exitkey[:10],"%Y-%m-%d").date()
     return trades,skips
@@ -291,7 +291,8 @@ def main():
     for c in cs:
         # Critically, prior available VIX close only; no same-day future info.
         prior=[(date,number) for date,number in vix.items() if date<c["d"]]
-        c["vix_prior"]=max(prior)[1] if prior else None
+        latest=max(prior) if prior else None
+        c["vix_prior"]=latest[1] if latest and (c["d"]-latest[0]).days<=7 else None
         c["vix_regime"]="high" if c["vix_prior"] is not None and c["vix_prior"]>=20 else ("normal" if c["vix_prior"] is not None else "unknown")
     db,nq=load_quotes(a.parquet,spot,daily,a.year)
     days=list(daily.d)
@@ -311,7 +312,7 @@ def main():
       "aegis_gap_next_session_big":summarize([x for x in aegis if x.get("next_day_gap") is not None and abs(x["next_day_gap"])>=.0075]),
       "skips":pd.DataFrame(skips).reason.value_counts().to_dict() if skips else {},
       "source":"NIFTY traded 1m option OHLC, 5m cash index, 2024-25 prior-day VIX",
-      "model":"one lot, 0.75% premium or 0.75 pt each execution leg, 20 rupees commission/leg/order, estimated taxes; no bid/ask",
+      "model":f"one lot, {SLIP_PCT:.3%} premium or {SLIP_FLOOR:.2f} pt each execution leg, 20 rupees commission/leg/order, estimated taxes; no bid/ask",
       "lookahead":"Signal at 10:05, enter using 10:06 1-minute OPEN, 15m open-price monitoring; not an orderbook simulation",
       "held_out":a.year==2026,"limitations":["No real bid/ask or historical intraday futures","2026 VIX source missing","NIFTY index spot reference ends Apr 2026","2024 Nov20-Dec31 excluded due contract-size transition","no genuine intraminute stop execution"]}
     (out/f"summary_{a.year}.json").write_text(json.dumps(stats,indent=2,default=str))
