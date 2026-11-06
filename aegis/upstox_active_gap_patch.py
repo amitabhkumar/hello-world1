@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""AEGIS Nov-2026 ACTIVE derivatives missing-data patch (standalone, read-only).
+"""AEGIS targeted Upstox active-contract 1-minute supplement.
 
-Download this ONE Python file. It does not import upstox_market_export.py
-and does not require third-party Python packages. It does not access account,
-holdings, positions, orders, funds, or trading endpoints.
+STANDALONE version: Python 3.10+ standard library ONLY.
+Does NOT import upstox_market_export.py, so an old adjacent file cannot break it.
+GET-only approved public MARKET DATA endpoints. NEVER calls order, portfolio,
+holdings, positions, login, account, margin, or trading endpoints.
+The Analytics Token is entered by getpass and never written or printed.
 
-Requires the user's Upstox Analytics Token, entered privately via getpass.
-Token never stored. Reads only authenticated Upstox market-data endpoints:
-    /v2/option/contract
-    /v2/instruments/search
-    /v3/historical-candle/
-Output AEGIS_Upstox_Active_Patch.zip + token-free manifest.
+Run locally (not GitHub) with your private read-only Analytics Token:
+  python upstox_active_gap_patch.py --self-test   # offline, no token
+  python upstox_active_gap_patch.py --limit 4     # small API pilot
+  python upstox_active_gap_patch.py --limit 0     # target all relevant contracts
 
-Date windows: option candles Nov 02–05, futures candles Oct 28–Nov 05.
-Contracts: selected current Nov-2026 options and November future.
-Run: python upstox_active_gap_patch.py --limit 0
+Historical windows:
+  Options:   2026-11-02 through 2026-11-05, expiries 2026-11-06..11-19
+  NIFTY FUT: 2026-10-28 through 2026-11-05, nearest current-month future
+No original files are modified; outputs are a small supplementary ZIP.
 """
 from __future__ import annotations
 
@@ -26,317 +27,420 @@ import hashlib
 import json
 import pathlib
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
 
-API = "https://api.upstox.com"
+HOST = "https://api.upstox.com"
 UNDERLYING = "NSE_INDEX|Nifty 50"
-FIRST_OPTIONS = dt.date(2026, 11, 2)
-FIRST_FUTURES = dt.date(2026, 10, 28)
+OPT_START = dt.date(2026, 11, 2)
+FUT_START = dt.date(2026, 10, 28)
 LAST = dt.date(2026, 11, 5)
-EXPS_FIRST = dt.date(2026, 11, 6)
-EXPS_LAST = dt.date(2026, 11, 19)
-COLUMNS = ("timestamp", "open", "high", "low", "close", "volume", "oi")
-SAFE_PREFIXES = (
+MIN_OPTION_EXPIRY = dt.date(2026, 11, 6)
+MAX_OPTION_EXPIRY = dt.date(2026, 11, 19)
+IST = dt.timedelta(hours=5, minutes=30)
+CANDLE_FIELDS = ("timestamp", "open", "high", "low", "close", "volume", "oi")
+MARKET_ENDPOINTS = frozenset({
     "/v2/option/contract",
     "/v2/instruments/search",
-    "/v3/historical-candle/",
-)
+})
 
-def parse_date(x):
-    return dt.date.fromisoformat(str(x))
 
-def get_strike(contract):
+def safe_date(value):
     try:
-        return float(contract["strike_price"])
-    except (KeyError, ValueError, TypeError):
+        return dt.date.fromisoformat(str(value)[:10])
+    except (ValueError, TypeError):
         return None
 
-def regular_session_bar(value):
-    """Date-effective NSE index F&O bar-OPEN schedule, August 2026 onward."""
+
+def strike_of(contract):
     try:
-        t = dt.datetime.fromisoformat(str(value))
-        if t.utcoffset() != dt.timedelta(hours=5, minutes=30):
-            return False
-        latest = dt.time(15, 39) if t.date() >= dt.date(2026, 8, 3) else dt.time(15, 29)
-        return dt.time(9, 15) <= t.time().replace(tzinfo=None) <= latest
-    except (ValueError, TypeError):
+        return float(contract["strike_price"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def is_nifty(contract):
+    """Reject similarly named NIFTYBANK/FINNIFTY instruments."""
+    if contract.get("segment") != "NSE_FO":
+        return False
+    if contract.get("underlying_key") == UNDERLYING:
+        return True
+    if str(contract.get("underlying_symbol", "")).upper() == "NIFTY":
+        return True
+    if str(contract.get("name", "")).upper() == "NIFTY":
+        return True
+    return str(contract.get("trading_symbol", "")).upper().startswith("NIFTY ")
+
+
+def regular_fo_bar(ts, expiry=None):
+    """3-Aug-2026 change: F&O 09:15–15:39 minute starts until December."""
+    try:
+        t = dt.datetime.fromisoformat(str(ts))
+        return (
+            t.utcoffset() == IST
+            and OPT_START <= t.date() <= LAST
+            and dt.time(9, 15) <= t.time().replace(tzinfo=None) <= dt.time(15, 39)
+            and (expiry is None or t.date() <= expiry)
+        )
+    except (TypeError, ValueError):
         return False
 
-def store_json(path, payload):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    tmp.replace(path)
 
-def store_csv(path, rows):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(COLUMNS)
-        for r in rows:
-            writer.writerow(list(r[:7]) + [None] * max(0, 7-len(r)))
-    tmp.replace(path)
+def valid_candle(row):
+    try:
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            return False
+        o, h, l, c = map(float, row[1:5])
+        return o > 0 and l > 0 and c > 0 and h >= max(o, l, c) and l <= min(o, h, c)
+    except (TypeError, ValueError):
+        return False
 
-def valid_cache(csv_path, meta_path):
-    if not csv_path.is_file() or not meta_path.is_file():
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verified_cache(path, meta):
+    if not path.is_file() or not meta.is_file():
         return False
     try:
-        details = json.loads(meta_path.read_text(encoding="utf-8"))
-        if not details.get("sha256_csv"):
-            return False
-        return hashlib.sha256(csv_path.read_bytes()).hexdigest() == details["sha256_csv"]
-    except (OSError, ValueError, KeyError):
+        saved = json.loads(meta.read_text(encoding="utf-8"))
+        return bool(saved.get("sha256_csv")) and sha256_file(path) == saved["sha256_csv"]
+    except (ValueError, OSError, KeyError):
         return False
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(value, indent=2, default=str), encoding="utf-8")
+    temp.replace(path)
+
+
+def write_csv(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    with temp.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(CANDLE_FIELDS)
+        for row in rows:
+            # V3: [timestamp, open, high, low, close, volume, OI].
+            # Pad missing OI without guessing its economic value.
+            writer.writerow(list(row[:7]) + [None] * max(0, 7 - len(row)))
+    temp.replace(path)
+
 
 class MarketOnlyClient:
-    def __init__(self, token, minimum_delay=1.25):
-        self.token = token
-        self.minimum_delay = minimum_delay
+    """No dependency on the earlier Upstox exporter; strict GET allowlist."""
+
+    def __init__(self, token, delay=1.2):
+        self.__token = token
+        self.delay = max(1.1, float(delay))
         self.last_request = 0.0
         self.request_count = 0
 
-    def get_payload(self, path, params=None):
-        if not any(path.startswith(p) for p in SAFE_PREFIXES):
-            raise ValueError("Disallowed non-market-data API path")
-        url = API + path + ("?" + urlencode(params) if params else "")
+    def get(self, path, params=None):
+        # Hard deny all account, order and portfolio APIs.
+        if path not in MARKET_ENDPOINTS and not path.startswith("/v3/historical-candle/"):
+            raise ValueError("Blocked: not an approved market-data GET endpoint")
+        if path.startswith("/v3/historical-candle/") and "/minutes/1/" not in path:
+            raise ValueError("Blocked: unsupported historical candle interval")
+        url = HOST + path
+        if params:
+            url += "?" + urllib.parse.urlencode(params)
         for attempt in range(5):
-            remaining = self.minimum_delay - (time.monotonic() - self.last_request)
-            if remaining > 0:
-                time.sleep(remaining)
+            elapsed = time.monotonic() - self.last_request
+            if elapsed < self.delay:
+                time.sleep(self.delay - elapsed)
             self.last_request = time.monotonic()
-            req = Request(url, headers={
-                "Authorization": "Bearer " + self.token,
-                "Accept": "application/json",
-                "User-Agent": "AEGIS-Historical-Market-Only/2.0"
-            }, method="GET")
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": "Bearer " + self.__token,
+                    "Accept": "application/json",
+                    "User-Agent": "AEGIS-ReadOnly-Active-History/2.0",
+                },
+                method="GET",
+            )
             try:
-                with urlopen(req, timeout=75) as response:
-                    body = json.loads(response.read().decode("utf-8"))
                 self.request_count += 1
-                if body.get("status") != "success":
-                    codes = [str(e.get("error_code")) for e in body.get("errors", [])
-                             if isinstance(e, dict)]
-                    raise RuntimeError(f"Upstox API status error (codes: {codes})")
-                return body
-            except HTTPError as err:
-                self.request_count += 1
-                if err.code in (429, 500, 502, 503, 504) and attempt < 4:
-                    time.sleep(3 * (2 ** attempt))
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                if payload.get("status") == "error":
+                    codes = [
+                        x.get("error_code") for x in payload.get("errors", [])
+                        if isinstance(x, dict)
+                    ]
+                    raise RuntimeError("Upstox market-data API returned: " + str(codes))
+                return payload
+            except urllib.error.HTTPError as exc:
+                if exc.code in (429, 500, 502, 503, 504) and attempt < 4:
+                    time.sleep(3 * 2 ** attempt)
                     continue
-                # Avoid logging full request URLs (and any private API details).
-                raise RuntimeError(f"Upstox market-data API returned HTTP {err.code}") from None
-            except (URLError, TimeoutError):
+                # Avoid printing raw broker/API response bodies and credentials.
+                raise RuntimeError("Market-data API HTTP " + str(exc.code)) from None
+            except (urllib.error.URLError, TimeoutError):
                 if attempt < 4:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2 ** attempt + 1)
                     continue
-                raise RuntimeError("Upstox market-data endpoint unavailable after retries") from None
-        raise RuntimeError("Upstox retry limit reached")
+                raise RuntimeError("Market-data API network request failed") from None
+        raise RuntimeError("Market-data API retries exhausted")
 
     def active_options(self):
-        response = self.get_payload("/v2/option/contract", {"instrument_key": UNDERLYING})
-        result = response.get("data")
-        if not isinstance(result, list):
-            raise ValueError("Unexpected option contracts API response (expected data array)")
-        return result
+        data = self.get("/v2/option/contract", {"instrument_key": UNDERLYING}).get("data")
+        if not isinstance(data, list):
+            raise ValueError("Upstox option-contract API returned unexpected data")
+        return data
 
     def current_nifty_futures(self):
-        """Search NSE_FO FUT with documented pagination and exact underlying."""
-        seen = {}
-        for query in ("NIFTY", "NIFTY FUT"):
-            for page in range(1, 21):
-                response = self.get_payload("/v2/instruments/search", {
-                    "query": query,
+        results = {}
+        for page in range(1, 16):
+            response = self.get(
+                "/v2/instruments/search",
+                {
+                    "query": "NIFTY",
                     "exchanges": "NSE",
                     "segments": "FO",
                     "instrument_types": "FUT",
                     "expiry": "current_month",
                     "page_number": page,
                     "records": 30,
-                })
-                data = response.get("data")
-                if not isinstance(data, list):
-                    raise ValueError("Unexpected instrument search response")
-                for contract in data:
-                    if (contract.get("segment") == "NSE_FO"
-                        and contract.get("instrument_type") == "FUT"
-                        and (contract.get("underlying_key") == UNDERLYING
-                             or contract.get("underlying_symbol") == "NIFTY")
+                },
+            )
+            records = response.get("data")
+            if not isinstance(records, list):
+                raise ValueError("Upstox instrument-search API returned unexpected data")
+            for contract in records:
+                if (contract.get("instrument_type") == "FUT"
+                        and is_nifty(contract)
                         and contract.get("instrument_key")):
-                        seen[contract["instrument_key"]] = contract
-                metadata = response.get("meta_data") or {}
-                pages = (metadata.get("page") or {}).get("total_pages")
-                if pages is not None:
-                    if page >= int(pages):
-                        break
-                elif len(data) < 30:
-                    break
-            if seen:
+                    results[contract["instrument_key"]] = contract
+            pagination = (response.get("meta_data") or {}).get("page") or {}
+            total_pages = pagination.get("total_pages")
+            if total_pages is not None and page >= int(total_pages):
                 break
-        return list(seen.values())
+            if len(records) < 30:
+                break
+        return list(results.values())
 
-    def index_candles(self, key, first, last):
-        return self.active_candles(key, first, last)
-
-    def active_candles(self, key, first, last):
-        path = ("/v3/historical-candle/" + quote(key, safe="") +
-                "/minutes/1/" + last.isoformat() + "/" + first.isoformat())
-        response = self.get_payload(path)
-        data = response.get("data")
+    def candles(self, instrument_key, start, end):
+        if not isinstance(instrument_key, str) or not instrument_key.startswith("NSE_FO|"):
+            raise ValueError("Only NSE F&O instrument keys are permitted")
+        path = (
+            "/v3/historical-candle/"
+            + urllib.parse.quote(instrument_key, safe="")
+            + "/minutes/1/"
+            + end.isoformat()
+            + "/"
+            + start.isoformat()
+        )
+        data = self.get(path).get("data")
         if not isinstance(data, dict) or not isinstance(data.get("candles"), list):
-            raise ValueError("Unexpected historical V3 candle response")
+            raise ValueError("Upstox V3 candle API returned unexpected data")
         return data["candles"]
 
-def select_contracts(client, wing):
-    candidates = []
-    for item in client.active_options():
-        try:
-            expiry = parse_date(item["expiry"])
-        except (ValueError, KeyError, TypeError):
-            continue
-        if not EXPS_FIRST <= expiry <= EXPS_LAST:
-            continue
-        if (item.get("instrument_type") not in ("CE", "PE")
-            or not item.get("instrument_key") or item.get("segment") != "NSE_FO"):
-            continue
-        if not (item.get("underlying_key") == UNDERLYING
-                or item.get("underlying_symbol") == "NIFTY"):
-            continue
-        candidates.append(item)
-    spot = client.index_candles(UNDERLYING, FIRST_OPTIONS, LAST)
-    prices = [float(row[4]) for row in spot
-              if isinstance(row, list) and len(row) >= 5 and row[4] is not None
-              and float(row[4]) > 0]
-    if not prices:
-        raise RuntimeError("No NIFTY index historical candles for Nov 2-5: cannot safely select strikes")
-    low, high = min(prices) - wing, max(prices) + wing
-    selected = [x for x in candidates
-                if get_strike(x) is not None and low <= get_strike(x) <= high]
-    futures = [x for x in client.current_nifty_futures()
-               if x.get("instrument_key")
-               and parse_date(x.get("expiry", "1900-01-01")) > LAST]
-    futures = sorted(futures, key=lambda x: x["expiry"])[:1]
-    selected.sort(key=lambda x: (x["expiry"], float(x["strike_price"]), x["instrument_type"]))
-    return selected, futures, {
-        "NIFTY_spot_min": round(min(prices), 2),
-        "NIFTY_spot_max": round(max(prices), 2),
-        "strike_low": round(low, 2),
-        "strike_high": round(high, 2),
-    }
+    def index_candles(self, start, end):
+        path = (
+            "/v3/historical-candle/"
+            + urllib.parse.quote(UNDERLYING, safe="")
+            + "/minutes/1/"
+            + end.isoformat()
+            + "/"
+            + start.isoformat()
+        )
+        data = self.get(path).get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("candles"), list):
+            raise ValueError("Upstox NIFTY index candle response unexpected")
+        return data["candles"]
 
-def run(client, out, limit=0, wing=1200):
-    out.mkdir(parents=True, exist_ok=True)
-    options, futures, spot_range = select_contracts(client, wing)
-    manifest = {
-        "source": "Upstox Option Contracts + Instrument Search + Historical Candle V3",
-        "date_range": {
-            "options": [str(FIRST_OPTIONS), str(LAST)],
-            "futures": [str(FIRST_FUTURES), str(LAST)]
+
+def select_contracts(client, wing):
+    index = client.index_candles(OPT_START, LAST)
+    spot = [float(c[4]) for c in index if valid_candle(c)]
+    if not spot:
+        raise RuntimeError("No 2026-Nov-02 to Nov-05 NIFTY index candles available")
+    low = min(spot) - wing
+    high = max(spot) + wing
+    options = [
+        c for c in client.active_options()
+        if is_nifty(c)
+        and c.get("instrument_type") in ("CE", "PE")
+        and c.get("instrument_key")
+        and (exp := safe_date(c.get("expiry"))) is not None
+        and MIN_OPTION_EXPIRY <= exp <= MAX_OPTION_EXPIRY
+        and (strike := strike_of(c)) is not None
+        and low <= strike <= high
+    ]
+    futures = [
+        c for c in client.current_nifty_futures()
+        if safe_date(c.get("expiry")) is not None
+        and safe_date(c["expiry"]) > LAST
+        and c.get("lot_size")
+    ]
+    futures = sorted(futures, key=lambda c: c["expiry"])[:1]
+    return (
+        sorted(options, key=lambda c: (c["expiry"], float(c["strike_price"]),
+                                       c["instrument_type"])),
+        futures,
+        {
+            "spot_min": round(min(spot), 2),
+            "spot_max": round(max(spot), 2),
+            "selection_min": round(low, 2),
+            "selection_max": round(high, 2),
         },
-        "strike_selection": spot_range,
-        "candidate_options": len(options),
-        "candidate_futures": len(futures),
-        "files_written": 0, "files_reused": 0,
-        "empty": 0, "errors": [], "warnings": [],
-        "token_saved": False, "portfolio_access": False, "order_access": False,
-        "api_requests": client.request_count,
+    )
+
+
+def run(client, out, limit, wing):
+    out.mkdir(parents=True, exist_ok=True)
+    manifest_path = out / "AEGIS_active_patch_manifest.json"
+    manifest = {
+        "version": "standalone_v2",
+        "source": "Upstox market-only active contract discovery + Historical Candle V3",
+        "option_session_range": [str(OPT_START), str(LAST)],
+        "future_session_range": [str(FUT_START), str(LAST)],
+        "downloaded_contracts": 0,
+        "reused_contracts": 0,
+        "empty_contracts": 0,
+        "errors": [],
+        "warnings": [],
+        "private_token_saved": False,
+        "account_or_trading_endpoints_called": False,
     }
-    if not options:
-        manifest["warnings"].append("No active Nov 6-19 NIFTY options found")
-    if not futures:
-        manifest["warnings"].append("No current-month NIFTY future found")
-    contracts = ([("futures", x, FIRST_FUTURES) for x in futures] +
-                 [("options", x, FIRST_OPTIONS) for x in options])
-    processed = 0
-    print("DISCOVERY", "options", len(options),
-          "futures", len(futures), "selected", len(contracts), flush=True)
-    for kind, contract, start in contracts:
-        if limit and processed >= limit:
-            break
-        key = contract["instrument_key"]
-        expiry = parse_date(contract["expiry"])
-        typ = contract.get("instrument_type", "FUT")
-        strike = get_strike(contract) if kind == "options" else None
-        hashed_key = hashlib.sha256(key.encode()).hexdigest()[:12]
-        stem = (str(int(strike)) if strike is not None else "FUT") + "_" + typ + "_" + hashed_key
-        csv_path = out / kind / str(expiry) / (stem + ".csv")
-        sidecar = csv_path.with_suffix(".json")
-        if valid_cache(csv_path, sidecar):
-            manifest["files_reused"] += 1
-            continue
-        processed += 1
-        try:
-            rows = client.active_candles(key, start, LAST)
-            de_duped = {
-                str(x[0]): x for x in rows
-                if isinstance(x, list) and len(x) >= 6
-                and regular_session_bar(x[0])
-                and start <= parse_date(str(x[0])[:10]) <= LAST
-            }
-            data = [de_duped[t] for t in sorted(de_duped)]
-            if not data:
-                manifest["empty"] += 1
-                print("EMPTY", kind, str(expiry), strike, flush=True)
+    try:
+        options, futures, spot_range = select_contracts(client, wing)
+        manifest["spot_selection"] = spot_range
+        manifest["options_discovered"] = len(options)
+        manifest["futures_discovered"] = len(futures)
+        if not futures:
+            manifest["warnings"].append(
+                "No current NIFTY future found; inspect sanitized manifest, do not assume future gap closed"
+            )
+        if not options:
+            manifest["warnings"].append(
+                "No eligible listed NIFTY options found; check option expiry range and active contract availability"
+            )
+        selected = [("futures", c, FUT_START) for c in futures]
+        selected += [("options", c, OPT_START) for c in options]
+        processed = 0
+        for kind, c, first in selected:
+            if limit and processed >= limit:
+                break
+            expiry = safe_date(c.get("expiry"))
+            typ = c.get("instrument_type", "FUT")
+            key = c["instrument_key"]
+            strike = strike_of(c)
+            safe_id = hashlib.sha256(key.encode()).hexdigest()[:12]
+            stem = (str(int(strike)) if kind == "options" else "FUT")
+            path = out / kind / str(expiry) / f"{stem}_{typ}_{safe_id}.csv"
+            sidecar = path.with_suffix(".json")
+            if verified_cache(path, sidecar):
+                manifest["reused_contracts"] += 1
                 continue
-            store_csv(csv_path, data)
-            store_json(sidecar, {
-                "source": "upstox_historical_v3_active_1m",
-                "expiry": str(expiry),
-                "instrument_type": typ,
-                "strike_price": strike,
-                "lot_size": int(contract["lot_size"]),
-                "instrument_key": key,
-                "trading_symbol": contract.get("trading_symbol"),
-                "rows": len(data),
-                "first": str(data[0][0]),
-                "last": str(data[-1][0]),
-                "sha256_csv": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
-            })
-            manifest["files_written"] += 1
-            print("DOWNLOADED", kind, expiry, typ, strike, "bars", len(data), flush=True)
-        except Exception as err:
-            manifest["errors"].append({
-                "kind": kind, "expiry": str(expiry), "strike": strike,
-                "error_type": type(err).__name__, "message": str(err),
-            })
-            print("ERROR", kind, expiry, strike, str(err), flush=True)
-        finally:
-            manifest["api_requests"] = client.request_count
-            store_json(out / "AEGIS_active_patch_manifest.json", manifest)
-    manifest["contract_limit_reached"] = bool(limit and processed >= limit)
-    manifest["api_requests"] = client.request_count
-    store_json(out / "AEGIS_active_patch_manifest.json", manifest)
-    bundle = out.parent / "AEGIS_Upstox_Active_Patch.zip"
-    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for file in sorted(out.rglob("*")):
-            if file.is_file() and file.suffix in (".csv", ".json"):
-                archive.write(file, file.relative_to(out.parent))
-    print("PATCH_FINISHED", json.dumps(manifest, indent=2))
-    print("ARCHIVE", bundle, "BYTES", bundle.stat().st_size, flush=True)
+            processed += 1
+            try:
+                raw = client.candles(key, first, LAST)
+                dedup = {
+                    str(row[0]): row
+                    for row in raw
+                    if valid_candle(row)
+                    and regular_fo_bar(row[0], expiry=expiry)
+                    and first <= safe_date(row[0]) <= LAST
+                }
+                rows = [dedup[t] for t in sorted(dedup)]
+                if not rows:
+                    manifest["empty_contracts"] += 1
+                    print("EMPTY", kind, expiry, strike, flush=True)
+                else:
+                    write_csv(path, rows)
+                    write_json(sidecar, {
+                        "source": "upstox_historical_v3_active_1m",
+                        "expiry": str(expiry),
+                        "instrument_type": typ,
+                        "strike_price": strike,
+                        "lot_size": int(c["lot_size"]),
+                        "instrument_key": key,
+                        "trading_symbol": c.get("trading_symbol"),
+                        "rows": len(rows),
+                        "first": str(rows[0][0]),
+                        "last": str(rows[-1][0]),
+                        "sha256_csv": sha256_file(path),
+                    })
+                    manifest["downloaded_contracts"] += 1
+                    print("DOWNLOADED", kind, expiry, typ, strike, "bars", len(rows), flush=True)
+            except Exception as exc:
+                manifest["errors"].append({
+                    "kind": kind,
+                    "expiry": str(expiry),
+                    "strike": strike,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                })
+                print("ERROR", kind, expiry, strike, type(exc).__name__, flush=True)
+            finally:
+                manifest["api_requests"] = client.request_count
+                write_json(manifest_path, manifest)
+        manifest["limit_reached"] = bool(limit and processed >= limit)
+    except Exception as exc:
+        manifest["fatal_error"] = {"type": type(exc).__name__, "message": str(exc)}
+        print("DISCOVERY FAILED:", type(exc).__name__, str(exc), flush=True)
+    finally:
+        manifest["api_requests"] = client.request_count
+        write_json(manifest_path, manifest)
+        bundle = out.parent / "AEGIS_Upstox_Active_Patch.zip"
+        with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            for p in out.rglob("*"):
+                if p.is_file() and p.suffix in (".csv", ".json"):
+                    z.write(p, p.relative_to(out.parent))
+        print("PATCH_MANIFEST", json.dumps(manifest, indent=2), flush=True)
+        print("PATCH_ARCHIVE", str(bundle), "bytes", bundle.stat().st_size, flush=True)
     return manifest
 
+
+def self_test():
+    assert regular_fo_bar("2026-11-05T15:39:00+05:30")
+    assert not regular_fo_bar("2026-11-05T15:40:00+05:30")
+    assert not regular_fo_bar("2026-11-05T15:39:00+00:00")
+    assert is_nifty({"segment": "NSE_FO", "underlying_symbol": "NIFTY"})
+    assert not is_nifty({"segment": "NSE_FO", "underlying_symbol": "BANKNIFTY"})
+    client = MarketOnlyClient("test-never-sent")
+    for forbidden in ("/v2/order/place", "/v2/portfolio/short-term-positions", "/v2/user/profile"):
+        try:
+            client.get(forbidden)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Forbidden account/trading endpoint passed allowlist")
+    print("SELF-TEST PASSED: no external dependency, correct session cutoff, trading endpoints blocked")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Standalone read-only Upstox active NIFTY patch")
-    parser.add_argument("--out", default="AEGIS_Upstox_Active_Patch")
-    parser.add_argument("--limit", type=int, default=0,
-                        help="0 = all selected contracts; >0 for pilot")
-    parser.add_argument("--wing", type=float, default=1200)
-    args = parser.parse_args()
-    if args.limit < 0 or args.wing <= 0:
-        parser.error("limit must be >= 0 and wing must be > 0")
-    token = getpass.getpass("Read-only Upstox Analytics Token (hidden): ").strip()
+    p = argparse.ArgumentParser(description="Standalone AEGIS Upstox active F&O historical supplement")
+    p.add_argument("--limit", type=int, default=0, help="0 = all eligible contracts; 4 = small pilot")
+    p.add_argument("--wing", type=float, default=1200)
+    p.add_argument("--out", default="AEGIS_Upstox_Active_Patch")
+    p.add_argument("--self-test", action="store_true", help="Offline safety test, does not ask for token")
+    a = p.parse_args()
+    if a.self_test:
+        self_test()
+        return
+    if a.limit < 0 or a.wing <= 0:
+        p.error("limit cannot be negative and wing must be positive")
+    token = getpass.getpass("Upstox READ-ONLY Analytics Token (hidden; never saved): ").strip()
     if not token:
-        raise SystemExit("No token provided")
+        p.error("No Analytics Token supplied")
     client = MarketOnlyClient(token)
-    try:
-        run(client, pathlib.Path(args.out), limit=args.limit, wing=args.wing)
-    except (ValueError, RuntimeError) as err:
-        print("MARKET_DATA_ERROR", str(err))
-        print("No Upstox token or account information was saved.")
-        raise SystemExit(2) from None
+    report = run(client, pathlib.Path(a.out), a.limit, a.wing)
+    if report.get("fatal_error") or report.get("errors") or not report["downloaded_contracts"] + report["reused_contracts"]:
+        raise SystemExit("Supplement not fully successful; inspect token-free patch manifest ZIP")
+    print("No credential was saved. Upload only the generated market-data ZIP.")
+
 
 if __name__ == "__main__":
     main()
