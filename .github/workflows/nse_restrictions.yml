@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       report_date:
-        description: 'Exact report date YYYY-MM-DD; blank means current IST date'
+        description: 'Exact report date YYYY-MM-DD; blank selects eligible session using official calendar'
         type: string
         required: false
   push:
@@ -23,13 +23,19 @@ jobs:
   acquire:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.56.0-noble
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install playwright==1.56.0
-      - run: python -m playwright install --with-deps chromium
+      - name: Validate calendar and interpretation before acquisition
+        run: PYTHONPATH=. python tests/test_nse_session_selection.py
       - name: Download exact dated reports once
         env:
           REPORT_DATE: ${{ inputs.report_date }}
