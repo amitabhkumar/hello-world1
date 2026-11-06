@@ -4,6 +4,7 @@ on:
     branches: [aegis-nifty-backtest]
     paths:
       - '.github/workflows/aegis-backtest.yml'
+      - 'aegis/backtest_v01.py'
   workflow_dispatch:
 jobs:
   backtest:
