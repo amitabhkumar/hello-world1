@@ -1,0 +1,29 @@
+name: AEGIS NIFTY public intraday ingestion
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-nifty-intraday.yml'
+  workflow_dispatch:
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2024, 2025, 2026]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and SHA256-check NIFTY minute options for ${{ matrix.year }}
+        run: python aegis/download_intraday_one.py --year ${{ matrix.year }}
+      - name: Preserve source data and verification manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-nifty-intraday-${{ matrix.year }}
+          path: AEGIS_INTRADAY_${{ matrix.year }}/
+          retention-days: 7
+          if-no-files-found: error
