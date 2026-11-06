@@ -14,7 +14,7 @@ This replaces the outdated initial register that said no backtest had executed.
 - Integrated source lineage, trade ledger, skips and summary: https://drive.google.com/file/d/1SdFsJEND_ZaJ0r9w0UdPjKpQnfjz3SUN/view
 - **Executed 2026 bootstrap, tail-risk and cost stress:** https://github.com/amitabhkumar/hello-world1/actions/runs/42253307065
 - **2026 active-November contract ZIP integrity, merge and replay:** https://github.com/amitabhkumar/hello-world1/actions/runs/42273407619
-- **Current integrated evidence and robustness:** https://drive.google.com/file/d/1SdFsJEND_ZaJ0r9w0UdPjKpQnfjz3SUN/view (prior) and [current file verified in Drive folder](https://drive.google.com/drive/folders/1QKdK4ZBp9vtN2aL_e-NMsI7V9i8MpZhv)
+- **Current integrated evidence and robustness:** https://drive.google.com/file/d/1bD6Z0RmLBBVpNuuRnPNHJA35YhXqYv0w/view
 - Full robustness report: https://drive.google.com/file/d/1UT-grbfp3VcSbSfeDK-89_MlsOMPn_A3/view
 - Isolated repo branch: `aegis-nifty-backtest`; user Drive folder: https://drive.google.com/drive/folders/1QKdK4ZBp9vtN2aL_e-NMsI7V9i8MpZhv
 
