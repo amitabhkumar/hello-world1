@@ -1,0 +1,190 @@
+name: AEGIS v0.3 Nov active-contract patch and integrated 2026 replay
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-active-integrated-replay.yml'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate ephemeral audit-runner RSA key and announce public modulus
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/aegis-private.pem 2>/dev/null
+          openssl pkey -in /tmp/aegis-private.pem -pubout -out /tmp/aegis-public.pem
+          openssl rsa -pubin -in /tmp/aegis-public.pem -modulus -noout | sed 's/^Modulus=/AEGIS_RSA_MODULUS=/'
+          echo 'PRIVATE KEY IS IN THE RUNNER ONLY'
+      - name: Publish ephemeral public modulus, never the private key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,subprocess,base64,json,urllib.request
+          raw=subprocess.check_output(["openssl","rsa","-pubin","-in","/tmp/aegis-public.pem","-modulus","-noout"],text=True)
+          modulus=raw.strip().split("=",1)[1]
+          payload=json.dumps({"run_id":os.environ["GITHUB_RUN_ID"],"modulus_hex":modulus,
+              "exponent":65537,"scheme":"RSA-PKCS1v1_5-ephemeral"})
+          encoded=base64.b64encode(payload.encode()).decode()
+          body=json.dumps({"message":"Ephemeral public key for encrypted market-data handoff",
+               "content":encoded,"branch":"aegis-nifty-backtest"})
+          path="aegis/_private_handoff/pubkey_"+os.environ["GITHUB_RUN_ID"]+".json"
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/"+path
+          req=urllib.request.Request(url,data=body.encode(),method="PUT",
+                headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                  "Accept":"application/vnd.github+json","Content-Type":"application/json"})
+          with urllib.request.urlopen(req,timeout=30) as res:
+              print("Ephemeral public key published:",path,flush=True)
+          PY
+      - name: Receive two encrypted temporary ZIP links without storing credentials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json,os,subprocess,time,urllib.request,urllib.error
+          from urllib.parse import urlparse
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/aegis/_private_handoff/active-integration.enc.json?ref=aegis-nifty-backtest"
+          for attempt in range(120):
+              try:
+                  req=urllib.request.Request(url,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                        "Accept":"application/vnd.github.raw+json",
+                        "Cache-Control":"no-cache","User-Agent":"AEGIS-private-market-archive"})
+                  with urllib.request.urlopen(req,timeout=25) as res:
+                      payload=json.loads(res.read().decode("utf-8"))
+                  if payload.get("blobs"):break
+              except (urllib.error.HTTPError,urllib.error.URLError,ValueError):
+                  pass
+              time.sleep(5)
+          else:raise SystemExit("Encrypted market-data handoff was not delivered")
+          if payload.get("scheme")!="RSA-PKCS1v1_5-ephemeral" or payload.get("run_id")!=os.environ["GITHUB_RUN_ID"]:
+              raise SystemExit("Encrypted archive handoff mismatch")
+          for label,dest,minsize,maxsize in (
+              ("original","AEGIS_Upstox_Export.zip",90000000,100000000),
+              ("active","AEGIS_Upstox_Active_Patch.zip",4000000,6000000)):
+              blocks=payload["blobs"].get(label)
+              if not isinstance(blocks,list) or not 1<=len(blocks)<=10:
+                  raise SystemExit("Invalid encrypted archive descriptor")
+              clear=[]
+              for block in blocks:
+                  ciphertext=bytes.fromhex(block)
+                  proc=subprocess.run(["openssl","pkeyutl","-decrypt",
+                    "-inkey","/tmp/aegis-private.pem","-pkeyopt","rsa_padding_mode:pkcs1"],
+                    input=ciphertext,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+                  clear.append(proc.stdout)
+              signed=b"".join(clear).decode("utf-8")
+              parsed=urlparse(signed)
+              if parsed.scheme!="https" or not parsed.hostname or not parsed.hostname.endswith(".oaiusercontent.com"):
+                  raise SystemExit("Disallowed archive download URL")
+              request=urllib.request.Request(signed,headers={"User-Agent":"AEGIS-archive-replay/3.0"})
+              with urllib.request.urlopen(request,timeout=180) as response:
+                  count=0
+                  with open(dest,"wb") as output:
+                      while True:
+                          buf=response.read(1024*1024)
+                          if not buf:break
+                          output.write(buf)
+                          count+=len(buf)
+              if not minsize<=count<=maxsize:
+                  raise SystemExit(f"{label} archive size outside expected range: {count}")
+              print(f"Encrypted {label} market-data archive materialized, bytes={count}",flush=True)
+          PY
+      - name: Run original expired-data and active-patch integrity audits
+        run: |
+          python aegis/audit_upstox_zip.py AEGIS_Upstox_Export.zip --output AEGIS_original_zip_audit.json
+          python aegis/audit_active_patch.py --patch AEGIS_Upstox_Active_Patch.zip --original AEGIS_Upstox_Export.zip --out AEGIS_active_patch_audit.json
+      - name: Install Parquet and backtest numerical dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'pyarrow>=17,<24' 'duckdb>=1.2,<2'
+      - name: Obtain original verified public sources
+        run: |
+          python aegis/download_intraday_one.py --year 2026
+          python aegis/download_market_context.py
+      - name: Convert original market ZIP plus active November supplement
+        run: |
+          python aegis/stitch_upstox_2026.py --zip AEGIS_Upstox_Export.zip --support AEGIS_SUPPORT --output AEGIS_STITCH
+          python -m aegis.stitch_active_patch --zip AEGIS_Upstox_Active_Patch.zip --output AEGIS_STITCH
+      - name: Execute identical fixed-rule 2026 NIFTY options-candle strategy
+        shell: bash
+        run: |
+          export TZ=Asia/Kolkata
+          python aegis/backtest_v01.py --year 2026 \
+            --parquet "AEGIS_INTRADAY_2026/NIFTY_2026.parquet;AEGIS_STITCH/NIFTY_upstox_2026_jul_nov.parquet;AEGIS_STITCH/NIFTY_2026_active_options_patch.parquet" \
+            --support AEGIS_SUPPORT --out AEGIS_2026_WITH_ACTIVE_PATCH
+      - name: Retrieve exact prior trade ledger for apples-to-apples comparison
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42252130058
+          name: aegis-upstox-2026-stitch-and-replay
+          path: OLD
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate transparent coverage and before-after evidence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,pathlib,pandas as pd
+          patch=json.loads(pathlib.Path("AEGIS_active_patch_audit.json").read_text())
+          stitch=json.loads(pathlib.Path("AEGIS_STITCH/active_patch_ingestion.json").read_text())
+          old=json.loads(pathlib.Path("OLD/AEGIS_2026_EXTENSION/summary_2026.json").read_text())
+          new=json.loads(pathlib.Path("AEGIS_2026_WITH_ACTIVE_PATCH/summary_2026.json").read_text())
+          oldtr=pd.read_csv("OLD/AEGIS_2026_EXTENSION/trades_2026.csv")
+          newtr=pd.read_csv("AEGIS_2026_WITH_ACTIVE_PATCH/trades_2026.csv")
+          key=lambda r:(str(r["date"]),str(r["mode"]),str(r["expiry"]),str(r["legs"]))
+          oldkeys={key(r) for _,r in oldtr.iterrows()}
+          newkeys={key(r) for _,r in newtr.iterrows()}
+          gap_complete=(not patch["futures_missing_dates_vs_original_index"] and not patch["options_missing_dates_nov04_nov05"])
+          report={
+            "source":"AEGIS user-supplied original and active option/future ZIPs, SHA/CSV verified",
+            "simulation":"Original frozen 2026 v0.1 candle approximation; no bid/ask and not pristine OOS",
+            "original_zip_integrity":"previously verified and re-audited",
+            "active_zip_quality":patch,
+            "active_ingestion":stitch,
+            "gap_complete_against_original_index_sessions":gap_complete,
+            "gaps_futures":patch["futures_missing_dates_vs_original_index"],
+            "gaps_options_2026_nov04_nov05":patch["options_missing_dates_nov04_nov05"],
+            "prior":{"trades":old["aegis"]["n"],"pnl":old["aegis"]["net_pnl_rs"],
+                     "baseline_pnl":old["baseline_fixed_monday_straddle"]["net_pnl_rs"]},
+            "updated":{"trades":new["aegis"]["n"],"pnl":new["aegis"]["net_pnl_rs"],
+                     "baseline_pnl":new["baseline_fixed_monday_straddle"]["net_pnl_rs"],
+                     "win_rate":new["aegis"]["win_rate"],
+                     "max_drawdown":new["aegis"]["max_drawdown_rs"]},
+            "delta_net_pnl":round(new["aegis"]["net_pnl_rs"]-old["aegis"]["net_pnl_rs"],2),
+            "newly_present_trade_keys":list(map(list,sorted(newkeys-oldkeys))),
+            "formerly_present_trade_keys_missing_now":list(map(list,sorted(oldkeys-newkeys))),
+            "new_trade_entry_dates_nov04_nov05":sorted(set(newtr[newtr.date.isin(["2026-11-04","2026-11-05"])].date)),
+            "scope_note":"This validates option trading-date coverage but not every missing minute or strike/market depth. Missing futures do not enter the fixed v0.1 signal engine.",
+          }
+          target=pathlib.Path("AEGIS_2026_WITH_ACTIVE_PATCH/AEGIS_ACTIVE_PATCH_REPLAY_COMPARISON.json")
+          target.write_text(json.dumps(report,indent=2,default=str))
+          print("AEGIS_INTEGRATED_COMPARISON",json.dumps({
+             "archive_sha_verified":patch["sha256_csv_passed"],
+             "archive_status":patch["status"],
+             "active_options":stitch["options"],"active_futures":stitch["futures"],
+             "active_option_rows":stitch["option_rows"],"active_futures_rows":stitch["futures_rows"],
+             "futures_gaps":report["gaps_futures"],
+             "options_gaps":report["gaps_options_2026_nov04_nov05"],
+             "old":report["prior"],"new":report["updated"],
+             "delta_net":report["delta_net_pnl"],"new_trade_keys":len(newkeys-oldkeys)
+          },indent=2),flush=True)
+          PY
+      - name: Recompute same-trade robustness with active-contract supplement
+        run: python -m aegis.report_upstox_2026 --input AEGIS_2026_WITH_ACTIVE_PATCH --out AEGIS_2026_ACTIVE_ROBUSTNESS
+      - name: Archive all verified patch audit, updated ledgers, and robustness reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS_2026_ACTIVE_PATCH_FULL_INTEGRATED_EVIDENCE
+          path: |
+            AEGIS_active_patch_audit.json
+            AEGIS_STITCH/active_patch_ingestion.json
+            AEGIS_STITCH/ingestion_report.json
+            AEGIS_2026_WITH_ACTIVE_PATCH/
+            AEGIS_2026_ACTIVE_ROBUSTNESS/
+          if-no-files-found: warn
+          retention-days: 90
