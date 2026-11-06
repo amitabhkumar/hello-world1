@@ -1,0 +1,59 @@
+name: NSE dated recovery acceptance
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/nse_recovery_20261106.yml']
+permissions:
+  contents: read
+concurrency:
+  group: nse-dated-recovery-20261106
+  cancel-in-progress: false
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Retrieve exact historical files once and validate
+        shell: python
+        run: |
+          import csv,io,json,hashlib,urllib.request,datetime,pathlib
+          out=pathlib.Path("nse-recovery");out.mkdir()
+          files=[
+            ("sec_bhavdata_full_04112026.csv","https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_04112026.csv","04-Nov-2026","equity"),
+            ("sec_bhavdata_full_05112026.csv","https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_05112026.csv","05-Nov-2026","equity"),
+            ("ind_close_all_05112026.csv","https://nsearchives.nseindia.com/content/indices/ind_close_all_05112026.csv","05-11-2026","index")]
+          result=[]
+          for name,url,expected,kind in files:
+            r=dict(file=name,source=url,required_date=expected,retry_policy="NONE")
+            try:
+              request=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0"})
+              with urllib.request.urlopen(request,timeout=45) as response:
+                data=response.read()
+                final=response.geturl()
+              from urllib.parse import urlparse
+              assert urlparse(final).hostname=="nsearchives.nseindia.com","Unexpected source"
+              rows=list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
+              rows=[{k.strip():v.strip() for k,v in row.items()} for row in rows]
+              assert rows and b"<html" not in data[:1000].lower(),"Not a populated CSV"
+              if kind=="equity":
+                assert {"SYMBOL","SERIES","DATE1","OPEN_PRICE","HIGH_PRICE","LOW_PRICE","CLOSE_PRICE","TTL_TRD_QNTY","DELIV_QTY"}<=set(rows[0]),"Missing required equity fields"
+                assert all(x["DATE1"].lower()==expected.lower() for x in rows),"Source date mismatch"
+              else:
+                assert {"Index Name","Index Date","Closing Index Value"}<=set(rows[0]),"Missing index fields"
+                assert all(x["Index Date"]==expected for x in rows),"Source date mismatch"
+              (out/name).write_bytes(data)
+              r.update(status="VALIDATED_DATED_CSV",rows=len(rows),bytes=len(data),sha256=hashlib.sha256(data).hexdigest(),scope="Acquisition/date/schema validation only; calculations and corporate actions not yet verified")
+            except Exception as e:
+              r.update(status="FAILED",error=type(e).__name__+": "+str(e))
+            r["retrieved_at_utc"]=datetime.datetime.now(datetime.timezone.utc).isoformat()
+            result.append(r)
+          report=dict(purpose="Explicit 4/5 November recovery, not latest-date collector",datasets=result,drive_delivery="PENDING_WORKSPACE",original_forecasts="UNCHANGED")
+          (out/"manifest.json").write_text(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+      - name: Preserve exact files and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nse-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: nse-recovery/
+          retention-days: 90
