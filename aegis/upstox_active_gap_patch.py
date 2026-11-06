@@ -297,7 +297,7 @@ def select_contracts(client, wing):
     )
 
 
-def run(client, out, limit, wing):
+def run(client, out, limit=0, wing=1200):
     out.mkdir(parents=True, exist_ok=True)
     manifest_path = out / "AEGIS_active_patch_manifest.json"
     manifest = {
