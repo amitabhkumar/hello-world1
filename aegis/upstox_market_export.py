@@ -79,14 +79,49 @@ def put_candles(path,rows):
         writer.writerows(rows)
     tmp.replace(path)
 
-def regular_session_bar(timestamp):
-    """Flag normal NSE F&O 09:15-15:29 IST candles; raw data is kept."""
+# Date-effective NSE market-session regime references:
+#   NSE/FAOP/74467 (29-May-2026), effective 03-Aug-2026.
+#   SEBI HO/47/11/11(3)2025-MRD-POD2/I/23843/2026 (15-Oct-2026)
+#   effective 07-Dec-2026 (some unrelated provisions effective 08-Feb-2027).
+#   https://www.nseindia.com/static/products-services/closing-auction-session
+# October 2026 announcement is NOT retroactive for October trading days.
+CAS_FO_START=dt.date(2026,8,3)
+CAS_NEXT_PHASE=dt.date(2026,12,7)
+IST_OFFSET=dt.timedelta(hours=5, minutes=30)
+
+def session_last_minute(trade_date, *, expiry_date=None, segment="INDEX_FO"):
+    """Last allowed one-minute candle OPEN for a regular NSE session.
+
+    NSE NIFTY index F&O:
+      pre-Aug03: 09:15–15:29 inclusive (close at 15:30).
+      Aug03–Dec06: 09:15–15:39 inclusive (close at 15:40).
+      from Dec07: 09:15–15:44 inclusive (close at 15:45);
+        on expiry day expiring index contracts close at 15:30.
+    This does NOT describe the cash-equity CAS auction or NIFTY spot index
+    publication cadence, and special trading sessions must be added separately.
+    """
+    d=trade_date if isinstance(trade_date,dt.date) else dt.date.fromisoformat(str(trade_date))
+    e=(expiry_date if isinstance(expiry_date,dt.date) else
+       (dt.date.fromisoformat(str(expiry_date)) if expiry_date else None))
+    if segment not in ("INDEX_FO","STOCK_FO"):
+        raise ValueError("Unsupported session segment")
+    if d<CAS_FO_START:
+        return dt.time(15,29)
+    if d<CAS_NEXT_PHASE:
+        return dt.time(15,39)
+    if segment=="INDEX_FO" and e is not None and d==e:
+        return dt.time(15,29)
+    return dt.time(15,44)
+
+def regular_session_bar(timestamp, *, expiry_date=None, segment="INDEX_FO"):
+    """Session-aware F&O candle check; does not discard raw data."""
     try:
         t=dt.datetime.fromisoformat(str(timestamp))
-        # Broker API timestamps are expected to carry Asia/Kolkata +05:30.
-        if t.tzinfo is None or t.utcoffset()!=dt.timedelta(hours=5,minutes=30):
+        if t.tzinfo is None or t.utcoffset()!=IST_OFFSET:
             return False
-        return dt.time(9,15)<=t.time().replace(tzinfo=None)<=dt.time(15,29)
+        d=t.date()
+        cutoff=session_last_minute(d, expiry_date=expiry_date,segment=segment)
+        return dt.time(9,15)<=t.timetz().replace(tzinfo=None)<=cutoff
     except (TypeError,ValueError):
         return False
 
@@ -224,8 +259,8 @@ def probe(client,out,expiry):
             results["expired_candles"].append({
                 "kind":kind,"strike":get_strike(contract),"status":status,
                 "bars":len(rows),"lot_size":contract.get("lot_size"),
-                "regular_session_bars":sum(regular_session_bar(x[0]) for x in rows),
-                "out_of_session_bars":sum(not regular_session_bar(x[0]) for x in rows),
+                "regular_session_bars":sum(regular_session_bar(x[0],expiry_date=expiry) for x in rows),
+                "out_of_session_bars":sum(not regular_session_bar(x[0],expiry_date=expiry) for x in rows),
                 **samples})
         except Exception as e:
             results["expired_candles"].append({"kind":kind,"strike":get_strike(contract),"status":"error","message":str(e)})
@@ -319,8 +354,8 @@ def export(client,out,first,last,max_contracts,wing,lookback):
                         "strike_price":strike,"lot_size":obj.get("lot_size"),
                         "instrument_key":key,"trading_symbol":obj.get("trading_symbol"),
                         "rows":len(data),"first":str(data[0][0]),"last":str(data[-1][0]),
-                        "regular_session_rows":sum(regular_session_bar(x[0]) for x in data),
-                        "out_of_session_rows":sum(not regular_session_bar(x[0]) for x in data),
+                        "regular_session_rows":sum(regular_session_bar(x[0],expiry_date=expiry) for x in data),
+                        "out_of_session_rows":sum(not regular_session_bar(x[0],expiry_date=expiry) for x in data),
                         "note":"Raw Upstox candles retained. Trading simulator must exclude timestamps outside normal NSE session.",
                         "sha256_csv":hashlib.sha256(path.read_bytes()).hexdigest()})
                     summary["downloaded_contract_files"]+=1
