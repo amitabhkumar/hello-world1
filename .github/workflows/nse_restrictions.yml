@@ -30,10 +30,11 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install playwright==1.56.0
+      - name: Create isolated Python environment
+        run: |
+          python3 -m venv /tmp/nse-venv
+          /tmp/nse-venv/bin/python -m pip install playwright==1.56.0
+          echo '/tmp/nse-venv/bin' >> "$GITHUB_PATH"
       - name: Validate calendar and interpretation before acquisition
         run: PYTHONPATH=. python tests/test_nse_session_selection.py
       - name: Download exact dated reports once
