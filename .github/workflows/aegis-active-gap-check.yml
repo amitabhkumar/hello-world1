@@ -24,9 +24,10 @@ jobs:
           python -m py_compile aegis/upstox_market_export.py aegis/upstox_active_gap_patch.py
           python - <<'PY'
           import datetime as dt, tempfile, pathlib, zipfile
-          from aegis.upstox_active_gap_patch import run
+          from aegis.upstox_active_gap_patch import run, MarketOnlyClient, regular_session_bar
           from aegis.stitch_active_patch import convert_patch
-          from aegis.upstox_market_export import ReadOnlyClient
+          assert regular_session_bar('2026-11-05T15:39:00+05:30')
+          assert not regular_session_bar('2026-11-05T15:40:00+05:30')
           class FakeClient:
               request_count=0
               def active_options(self):
@@ -52,9 +53,44 @@ jobs:
                   assert any("/options/" in p for p in z.namelist())
               summary=convert_patch(archive,pathlib.Path(tmp)/"parquet")
               assert summary["option_rows"]==1 and summary["futures_rows"]==1,summary
-              fake=ReadOnlyClient("fake")
+              fake=MarketOnlyClient("fake")
               for blocked in ("/v2/order/place","/v2/portfolio/long-term-holdings"):
-                  try:fake.get(blocked);raise AssertionError("unsafe endpoint allowed")
+                  try:fake.get_payload(blocked);raise AssertionError("unsafe endpoint allowed")
                   except ValueError:pass
+              # Test documented Upstox response shapes and pagination without network.
+              class MockClient(MarketOnlyClient):
+                  def get_payload(self,path,params=None):
+                      if path=="/v2/option/contract":
+                          return {"status":"success","data":[{"expiry":"2026-11-10","instrument_type":"CE",
+                           "instrument_key":"NSE_FO|C","segment":"NSE_FO","underlying_symbol":"NIFTY",
+                           "strike_price":24500,"lot_size":65}]}
+                      if path=="/v2/instruments/search":
+                          assert params["instrument_types"]=="FUT"
+                          return {"status":"success","data":[{"expiry":"2026-11-24","instrument_type":"FUT",
+                           "instrument_key":"NSE_FO|F","segment":"NSE_FO","underlying_symbol":"NIFTY",
+                           "strike_price":0,"lot_size":65}],
+                           "meta_data":{"page":{"page_number":1,"total_pages":1}}}
+                      if path.startswith("/v3/historical-candle/"):
+                          return {"status":"success","data":{"candles":[
+                           ["2026-11-05T15:39:00+05:30",24500,24510,24490,24505,100,50]]}}
+                      raise AssertionError("unexpected API path "+path)
+              m=MockClient("dummy")
+              assert len(m.active_options())==1
+              assert len(m.current_nifty_futures())==1
+              assert len(m.active_candles("NSE_FO|C",dt.date(2026,11,2),dt.date(2026,11,5)))==1
           print("Read-only active gap supplement test succeeded")
+          PY
+      - name: Verify single-file Windows delivery has no local exporter dependency
+        shell: bash
+        run: |
+          mkdir -p /tmp/aegis-standalone-only
+          cp aegis/upstox_active_gap_patch.py /tmp/aegis-standalone-only/upstox_active_gap_patch.py
+          cd /tmp/aegis-standalone-only
+          python upstox_active_gap_patch.py --help
+          python - <<'PY'
+          import upstox_active_gap_patch as patch
+          assert hasattr(patch.MarketOnlyClient, "active_options")
+          assert hasattr(patch.MarketOnlyClient, "current_nifty_futures")
+          assert hasattr(patch.MarketOnlyClient, "active_candles")
+          print("Standalone mode verified: old upstox_market_export.py NOT PRESENT")
           PY
