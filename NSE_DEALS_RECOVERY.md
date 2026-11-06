@@ -1,6 +1,6 @@
 # NSE bulk/block recovery
 
-This workflow recovers an explicitly requested historical date. It does not replace the BSE or NSE restriction collectors and adds no cron schedule.
+This workflow acquires NSE bulk/block reports on the TITAN SOP schedule and supports explicit historical recovery. It does not replace or modify BSE or NSE restriction collectors.
 
 ## Official route discovery
 
@@ -12,10 +12,18 @@ Use `optionType=block_deals` for block deals. This is the website's published AP
 
 ## Execution
 
-Run `.github/workflows/nse_deals_recovery.yml` with explicit `report_date` YYYY-MM-DD. The push acceptance default is fixed4November2026 and must not be treated as a latest-date collector. Use a verified eligible historical session. The browser establishes ordinary session state via the catalogue and reports page. No stealth, captcha bypass or automatic download retry loop is used.
+Run `.github/workflows/nse_deals_recovery.yml` with optional `report_date` YYYY-MM-DD. Blank uses the shared official NSE calendar and date-selection helper. The fixed4November default was removed in commit937a0e5e0e92d51008ef44ed92ac44846a7ade61. Morning selects the prior eligible session; post-market selects today but records Pending publication before20:35 IST. Closed days select the latest eligible session. No unavailable required-date file is replaced with an older file. Calendar coverage beyond2026 fails explicitly. The browser establishes ordinary session state via the catalogue and reports page. No stealth, captcha bypass or automatic download retry loop is used.
 
 The workflow uses Playwright1.56 Chromium in the official container. It checks HTTP200, rejects HTML, checks nonempty CSV and all-row dates, accepts case variation in month names, records hashes and preserves raw returned CSVs before validation. Empty data is not automatically declared no deals. Independent schema, quantity/price, identifiers and exact byte readback checks remain required after acquisition. Successful download does not establish full ownership coverage or trading permission.
 
 Artifacts `nse-deals-RUN_ID-ATTEMPT` retain raw reports and manifest for90days. Preserve evidence externally before expiry. Never put credentials or private storage IDs here.
 
 First test42215089840 returnedHTTP200 for both reports but failed date validation because `04-NOV-2026` was compared case-sensitively. Commit68bede5c1caa4b745501f067bfeeb4d3ebf74cfd corrects that comparison and preserves raw CSV before validation. Keep the original failed run for audit. No punctual scheduled delivery claim follows from a push test.
+
+## Scheduled integration acceptance
+
+Cron triggers:08:30 IST Monday-Friday;16:30 IST Monday-Friday;22:00 IST daily;08:00 IST Saturday. The16:30 run records pending publication without a download. The22:00 run makes one attempt for the selected date. No punctual execution guarantee follows from cron configuration.
+
+Commit937a0e5e0e92d51008ef44ed92ac44846a7ade61 deployed the schedule, date selection and quantity/price/schema validation. Run42216188918 passed five acceptance test methods covering ten date/time cases, missing2027coverage, invalid explicit dates, schedule configuration, uppercase/mixed dates and malformed values. Its artifact13501990727 recorded PENDING_PUBLICATION_WINDOW for6November at17:45IST, with no requests. Historical download acceptance remains run42215275181 (133bulk rows,2block rows for4November).
+
+GitHub artifacts are retained90days. Automatic GitHub-to-Drive transfer is not configured in this workflow; manifest explicitly reports NOT_TRANSFERRED. Session connector access is not a GitHub runner credential. External persistence/readback must be recorded separately. Existing research forecasts and prior failed runs remain unchanged.
