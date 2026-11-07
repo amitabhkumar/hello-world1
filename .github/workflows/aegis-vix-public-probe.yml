@@ -1,0 +1,35 @@
+name: AEGIS 2026 India VIX public history feasibility
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths: ['.github/workflows/aegis-vix-public-probe.yml']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: |
+          python - <<'PY'
+          from urllib.parse import quote
+          from urllib.request import urlopen,Request
+          from urllib.error import HTTPError,URLError
+          import json
+          keys=["NSE_INDEX|India VIX","NSE_INDEX|India Vix"]
+          for key in keys:
+              url=f"https://api.upstox.com/v3/historical-candle/{quote(key,safe='')}/minutes/1/2026-02-06/2026-02-02"
+              try:
+                  with urlopen(Request(url,headers={"Accept":"application/json","User-Agent":"AEGIS-VIX-Probe/1.0"}),timeout=18) as r:
+                      d=json.loads(r.read())
+                  candles=d.get("data",{}).get("candles",[])
+                  print("AEGIS_VIX_PROBE",json.dumps({"key":key,"http_status":r.status,"status":d.get("status"),
+                         "count":len(candles),"first":candles[0][0] if candles else None}),flush=True)
+              except HTTPError as e:
+                  print("AEGIS_VIX_PROBE",json.dumps({"key":key,"http_status":e.code}),flush=True)
+              except URLError as e:
+                  print("AEGIS_VIX_PROBE",json.dumps({"key":key,"network_error_class":type(e.reason).__name__}),flush=True)
+          PY
