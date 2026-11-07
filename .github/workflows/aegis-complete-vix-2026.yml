@@ -1,0 +1,44 @@
+name: AEGIS complete India VIX 2026 historical quality
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-complete-vix-2026.yml'
+      - 'aegis/fetch_vix_2026_public.py'
+  workflow_dispatch:
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify no-token India VIX V3 histories for all 2026 market months
+        run: |
+          python -m py_compile aegis/fetch_vix_2026_public.py
+          python aegis/fetch_vix_2026_public.py --out AEGIS_VIX_2026_COMPLETE
+      - name: Check complete Jan-Nov 2026 VIX source diagnostics
+        run: |
+          python - <<'PY'
+          import csv,json,pathlib,datetime
+          root=pathlib.Path("AEGIS_VIX_2026_COMPLETE")
+          q=json.loads((root/"AEGIS_VIX_2026_DATA_QUALITY.json").read_text())
+          rows=list(csv.DictReader((root/"vix_2026.csv").open()))
+          assert q["status"]=="public_upstox_vix_2026_1min_verified"
+          assert q["valid_minute_records"]>60000,q
+          assert q["distinct_sessions"]>=180,q
+          assert q["token_used"] is False
+          assert len(rows)==q["distinct_sessions"]
+          assert all(float(r["close"])>0 for r in rows)
+          print("AEGIS_2026_VIX_RESEARCH_QUALITY_PASS",json.dumps({
+            "days":q["distinct_sessions"],"minute_candles":q["valid_minute_records"],
+            "nonstandard_days":len(q["non375_sessions"])}),flush=True)
+          PY
+      - name: Persist VIX close and SHA source evidence for research
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS_2026_COMPLETE_INDIA_VIX_RESEARCH_CONTEXT
+          path: AEGIS_VIX_2026_COMPLETE/
+          retention-days: 90
