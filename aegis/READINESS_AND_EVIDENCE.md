@@ -1,151 +1,119 @@
-# NIFTY AEGIS — Executed Evidence, Dataset Coverage and Readiness (7 November 2026)
+# AEGIS NIFTY — Current research evidence and readiness decision
 
-**Status: executable preliminary one-minute option-OHLC backtest completed through the available November 2026 records. NOT validated for deployment.**
+**Evidence cut-off: 7 November 2026 (India, IST).**
 
-This replaces the outdated initial register that said no backtest had executed.
+> **Research execution: COMPLETE within the available OHLC datasets and documented approximations.**
+> **Institutional execution validation: NOT COMPLETE. Trading-readiness gate: FAILED.**
+> 2024–2026 NIFTY 1-minute option-candle backtests show negative modeled performance. No positive verified edge; **do not deploy live capital** on the present model.
 
-## Authoritative execution evidence
+This file is the current canonical status. Previous reports and failed/retried GitHub Actions remain archived for traceability, but superseded older 2026 partial P&L figures should **not** be treated as final.
 
-- 2024–2026 original v0.1 execution: https://github.com/amitabhkumar/hello-world1/actions/runs/42185786356
-- Original 2024–2026 report: https://drive.google.com/file/d/1UUN7EFBzJZvdSnwRPOfC-cJe_YWWbeN8/view
-- Source Upstox 2026 contract ZIP: https://drive.google.com/file/d/1nRSNHsVlU9gmfKl5vd_-RoTXoKb1o2Cp/view
-- Verified 2026 original ZIP checksum / archive audit: https://github.com/amitabhkumar/hello-world1/actions/runs/42247754833
-- **Executed full 2026 stitched research replay:** https://github.com/amitabhkumar/hello-world1/actions/runs/42252130058
-- Integrated source lineage, trade ledger, skips and summary: https://drive.google.com/file/d/1SdFsJEND_ZaJ0r9w0UdPjKpQnfjz3SUN/view
-- **Executed 2026 bootstrap, tail-risk and cost stress:** https://github.com/amitabhkumar/hello-world1/actions/runs/42253307065
-- **2026 active-November contract ZIP integrity, merge and replay:** https://github.com/amitabhkumar/hello-world1/actions/runs/42273407619
-- **Current integrated evidence and robustness:** https://drive.google.com/file/d/1bD6Z0RmLBBVpNuuRnPNHJA35YhXqYv0w/view
-- Full robustness report: https://drive.google.com/file/d/1UT-grbfp3VcSbSfeDK-89_MlsOMPn_A3/view
-- Isolated repo branch: `aegis-nifty-backtest`; user Drive folder: https://drive.google.com/drive/folders/1QKdK4ZBp9vtN2aL_e-NMsI7V9i8MpZhv
+## 1. Final user-facing reports and independently verified runs
 
-## Input rows and temporal boundaries
+- **Final full rolling two-year research package** (all-year 2026 VIX, date-effective lots and costs, prior-day futures-basis diagnostic, trade ledgers, drawdown, bootstraps, fee stress, source manifests):
+  https://drive.google.com/file/d/11qSOto9GjZg1GorQJU_Ctf1tkXidhB_q/view
+- Full 2024–2026 fee-corrected historical replay (successful, 2024/25 rebuilt from checksum-pinned public Parquet sources; 2026 reused previously audited private Upstox trade ledger): https://github.com/amitabhkumar/hello-world1/actions/runs/42332081624
+- All 2026 VIX data retrieved from public Upstox V3 without token (success): https://github.com/amitabhkumar/hello-world1/actions/runs/42332475921
+- Final complete VIX prior-day attribution, 2026 all 39 trades labeled with no lookahead (success): https://github.com/amitabhkumar/hello-world1/actions/runs/42332677918
+- Final limited available daily futures basis attribution (success): https://github.com/amitabhkumar/hello-world1/actions/runs/42332895008
+- 2026 39-trade source Upstox active-contract option backtest and robustness (success): https://github.com/amitabhkumar/hello-world1/actions/runs/42273407619
+- Fixed Nov 2026 futures Oct28–30 gaps via one token-free V3 request (success): https://github.com/amitabhkumar/hello-world1/actions/runs/42330977469
+- Final repaired futures Parquet, 7/7 expected sessions ×385 one-minute bars (success): https://github.com/amitabhkumar/hello-world1/actions/runs/42331212071
 
-| Data source | Records / files | Observed coverage | Integrity |
-|---|---:|---|---|
-| Public options 1-minute 2024 | 14,592,609 rows | Oct1–Dec31 2024 | Initial source and schema checks passed |
-| Public options 1-minute 2025 | 69,687,860 rows | Jan1–Dec31 2025 | Initial source and schema checks passed |
-| Public options 1-minute 2026 | 40,177,780 rows | Jan1–Jul21 2026 | Initial source and schema checks passed |
-| **User Upstox Plus options 1-minute 2026** | **8,777,148 rows / 1,990 CSVs** | **Jul22–Nov03 2026** | **1,990 SHA-verified CSVs, no corrupt files** |
-| **User Upstox Plus futures 1-minute 2026** | **34,520 rows / 4 CSVs** | **Jul22–Oct27 2026** | **4 SHA-verified CSVs** |
-| User Upstox NIFTY 1-minute and India VIX 1-minute | 55,500 total rows / 12 CSVs | Jul22–Nov05 2026 | No invalid OHLC or out-of-session rows reported |
-| Historical 5-minute NIFTY index | Independent mirror | 2024–Apr21 2026 | Original source with pinned ZIP digest |
-| Additional public NIFTY 1-minute converted to 5-minute | 4 monthly files | Apr22–Jul21 2026 | Source URLs and SHA-256 in stitched ingestion report |
+Source-controlled research scripts: `aegis/backtest_v01.py`, `aegis/exchange_rules.py`, `aegis/rolling_research_final.py`, `aegis/relabel_2026_vix.py`, and `aegis/futures_basis_research.py`, all on the isolated branch `aegis-nifty-backtest`. GitHub Actions workflows and pinned SHA-256 source manifests provide reproducibility.
 
-The original Upstox ZIP audit found 1,994 populated derivative CSVs, 1,994 matching SHA-256 hashes, no corrupt CSVs, no invalid OHLC observations and no out-of-session observations under the date-effective NSE derivatives session schedule. Its 52 empty API contract responses were not included as populated contract files.
+## 2. Executed rolling historical results
 
-The `aegis/stitch_upstox_2026.py` replay consumed **all 8,777,148 Upstox option candle rows without rejecting bad rows or timestamps** and converted the 34,520 futures rows to Parquet. It created a 2026 stitched NIFTY 5-minute index and daily VIX close series. The actual P&L engine consumes **option candles, spot data and VIX diagnostic regimes; it does not yet consume futures basis in signal selection or pricing**.
+Research window **6 November 2024–5 November 2026**. Research strategy A/B/C is a **simplified, fixed-rule, one-lot long-convexity study**, not a documented reproduction of any unprovided institutional strategy specification. Observed 1-minute OHLC prices are modeled with adverse fill slippage and current/historical charges, not bid/ask or real order executions. Assumed capital ₹50,00,000.
 
-## Observed AEGIS performance (not historical fills)
-
-### Original development
-
-- 2024 (warmup eligible from October only) and 2025 development: **38 strategy trades, net −₹46,982.13**.
-- First 2026 Jan–Apr21 truncated replay: **16 trades, net +₹29,435.22**. This earlier figure is superseded for full-2026 research by the stitched replay because some exit observations changed after extending the cash-index history.
-
-### Prior stitched 2026 replay before active November patch (superseded)
-
-| Entry-date cohort | Strategy trades | Net P&L |
+| Entry year | Trades | Net modeled P&L |
 |---|---:|---:|
-| Jan1–Apr21 2026 | 16 | +₹23,595.14 |
-| Apr22–Jul21 2026 | 11 | −₹42,262.89 |
-| Jul22–Nov03 2026 | 11 | −₹3,456.04 |
-| **2026 total** | **38** | **−₹22,123.79** |
+| Nov 6–Dec 31 2024 | 6 | **−₹5,663.31** |
+| Jan–Dec 2025 | 37 | **−₹42,676.13** |
+| Jan 1–Nov 5 2026 | 39 | **+₹448.55** |
+| **Rolling two-year total** | **82** | **−₹47,890.89** |
 
-2026 win rate 34.21% (13 winning), mean P&L −₹582.20 per trade, profit factor 0.802, maximum closed-trade drawdown ₹74,032.93, worst trade −₹8,715.07, IID bootstrap mean-trade 95% interval ₹[−2,723.37,+1,910.13]. Removing best winner gives −₹51,327.45; removing best two gives −₹71,770.30. A naïve Monday-straddle benchmark lost ₹92,941.65 over 36 2026 trades.
+**Full period:** Win rate **36.59%** (30 wins), profit factor **0.783**, expectancy **−₹584.04 per trade**, median trade **−₹2,591.66**, max **closed-trade** drawdown **₹94,173.04**, worst trade **−₹12,379.92**, mean worst 5% of trades **−₹9,754.61**. Return on assumed ₹50 lakh capital −0.9578% before any unmodeled financing/opportunity cost.
 
-Matched-trade adverse slippage (minimum 0.75 option points per side) at 0.25%, 0.75%, 1.50% and 3.00% returned **−₹15,224.11, −₹22,123.79, −₹35,372.02 and −₹62,918.57**, respectively. Matched-trade cost tests change fills only, not the entry and exit decisions.
+- 2024–2025 chronological development segment: **43 trades, −₹48,339.44**.
+- 2026 chronological retrospective evaluation segment: **39 trades, +₹448.55**. 2026 has been inspected repeatedly, so **it is NOT a pristine untouched out-of-sample validation**.
+- Omitting the single best winner worsens the rolling result to **−₹77,094.55**; omitting the best two to **−₹99,676.12**.
+- IID bootstrap mean-trade 95% interval **[−₹1,946.34, +₹873.55]**; calendar-month block bootstrap interval **[−₹1,748.57, +₹844.54]**. Intervals cross zero and do not establish positive expectation.
 
-**Classification:** the 2026 extension is *exploratory*, not a pristine untouched out-of-sample holdout; previous 2026 results were already inspected. A negative historical experiment does not imply the strategy is profitable or ready to trade.
+### Execution-cost sensitivity (same frozen trades, premium slippage each side, minimum 0.75 option points/leg/side)
 
-## Current stitched 2026 run **after** active November patch
+| Adverse slippage | Two-year net modeled P&L |
+|---|---:|
+| 0.25% | −₹33,715.95 |
+| **0.75% (baseline)** | **−₹47,890.89** |
+| 1.50% | −₹75,425.74 |
+| 3.00% | −₹133,074.40 |
 
-- User supplied `AEGIS_Upstox_Active_Patch.zip` from Nov06: **286 populated contract CSVs (285 options, 1 November futures) with 286 matching SHA-256 checks and no invalid session/ohlc rows**. Contains **376,301** option minute bars (November 02–05) plus **1,540** futures bars (November 02–05, 385 each). Separately 15 empty contract responses, not checksum failures.
-- NIFTY options **November 04: 102,159 bars across 270 contracts**; **November 05: 104,328 across 278 contracts**. Both days covered, with Nov09 and Nov17 option expiries.
-- Futures benchmarked to NIFTY cash index: **missing October 28, October 29 and October 30**, present November 02–05; the v0.1 options signal engine currently does not use futures basis.
-- Run: https://github.com/amitabhkumar/hello-world1/actions/runs/42273407619
-- Integrated report: `AEGIS_2026_ACTIVE_PATCH_FULL_INTEGRATED_EVIDENCE` archived under the above workflow, additionally saved to the user's AEGIS Drive folder.
+The stress tests change price assumptions, not the trade-entry/exit decisions. A realistic market-impact and bid/ask backtest could differ further.
 
-| Metric | Before active option patch | After active option patch |
-|---|---:|---:|
-| 2026 strategy trades | 38 | **39** |
-| 2026 modelled net P&L | −₹22,123.79 | **+₹458.21** |
-| Win rate | 34.21% | **35.90%** |
-| Profit factor | 0.802 | **1.004** |
-| Closed-trade max drawdown | ₹74,032.93 | **₹74,032.93** |
-| Naive Monday straddle baseline P&L | −₹92,941.65 | −₹76,633.14 |
+## 3. Reconciled data inventory and temporal provenance
 
-The active-contract patch enabled **one additional strategy trade worth +₹22,582.00 net**, creating the complete change. Its entry was **3 November 2026**, expiry **9 November 2026**, mode **A (long 23,600 CE + long 23,600 PE)**; the candle-based exit was **5 November 2026 at 09:16 IST** on a simulated profit target. Modelled gross P&L +₹22,778.23, charges ₹196.23. Exact trade provenance: https://github.com/amitabhkumar/hello-world1/actions/runs/42274283691. No new strategy positions were entered on 4–5 November; new active-series prices instead enabled this prior-day trade to be evaluated. There is no evidence of stable positive expectancy: **IID bootstrap 95% mean-trade interval −₹2,323.03 to +₹2,764.83**, P&L without the best winning trade **−₹28,745.45**, and higher-slippage stress at **1.5%: −₹13,326.70** and **3.0%: −₹41,946.61**. The matched-trade 0.25%, 0.75%, 1.5%, 3% stress shows ₹7,679.39, ₹458.21, −₹13,326.70 and −₹41,946.61.
-
-**Do not treat +₹458.21 as proof of trading edge or a finished two-year institutional replay.** The April–July 2026 cohort alone lost ₹42,262.89, 2024 transition periods remain excluded, no historical executable bid/ask was supplied and 2026 has already been analyzed repeatedly.
-
-## Explicit outstanding work and limits
-
-| Component | Status | What remains |
+| Data | Evidence status | Note |
 |---|---|---|
-| Import and validate supplied 95MB Upstox ZIP | **Complete** | Retain source and SHA audit |
-| Export actual option and future 1-minute bars as usable Parquet | **Complete** | Use source lineage with dates and contracts |
-| Historical index plus VIX stitching | **Complete for July–November**, partial older 2026 VIX | NSE daily cross-verification and 2026 Jan–Jul VIX still needed |
-| Run AEGIS v0.1 candle backtest through Nov05 2026 | **Executed; near flat (+₹458.21 net)** | Need stronger fill and strategy fidelity |
-| Historical contract calendars, expiry settlement and lot changes | **Partially modeled** | Full date-effective exchange-circular and daily calendar QA |
-| NSE CAS derivative sessions | **Date-effective session flags implemented** | Exchange event-by-event auction/settlement execution simulation is not implemented |
-| Options on Nov04–Nov05 | **Recovered and verified** | Date-level 1m coverage and 285 active-option contracts acquired; sparse strikes are not necessarily corruption |
-| Futures on Oct28–Nov05 | **Fully recovered and verified** | **2,695 Nov23-contract one-minute bars**, 385 per trading day for Oct28–30 and Nov02–05; all 286 market CSV checksums passed |
-| Fully aligned futures basis/forward IV | **Not in AEGIS v0.1 strategy logic** | Build separately and run controlled ablation |
-| Historical executable bid/ask, market depth | **Missing** | Licensed quotes or an explicit proxy; current results have modeled adverse spreads |
-| Complete rolling two-year Nov06 2024–Nov05 2026 window | **Not yet demonstrated** | Historical lot-size transition Nov20–Dec31 2024 excluded, NSE session rules and 2026 futures October 28–30 still pending; executable bid/ask absent |
-| Institutional AEGIS original specification fidelity | **Not established** | Current A/B/C is simplified, uses 350-pt verticals, 15m exit checks |
-| Untouched prospective walk-forward | **Not established** | Freeze new rules then test genuinely unseen future sessions |
-| Production live trading readiness | **NO** | Data, quality, fills, net edge and drawdown gates not passed |
+| Public one-minute NIFTY option candles for Oct–Dec 2024, 2025, Jan–Jul 21 2026 | SHA-256-pinned Parquet source used in executed replays | From the independently published historical intraday dataset, exact SHA-256 manifests in runner artifacts |
+| Private Upstox original Jul22–Nov03 2026 options | **1,990 contract CSV files, 8,777,148 1m candles** | ZIP audited (1,994/1,994 original option+future SHA checks passed); original unchanged |
+| Original Upstox 2026 futures Jul22–Oct27 | **4 populated contract CSVs, 34,520 1m records** | Available but the AEGIS v0.1 trade rules do not consume futures basis |
+| Active NIFTY option supplement Nov02–05 2026 | **285 contract CSVs, 376,301 1m records** | 286/286 active option+future SHA checks passed |
+| November 23 NIFTY FUT, Oct28–Nov05 2026 | **2,695 1m candles across 7 sessions** | All 385 minute starts/session, recovered missing 1,155 Oct28–30 from public V3, no user token |
+| India VIX 2026 Jan1–Nov05 | **78,375 minute candles, 209 complete sessions** | 375 candles/day, verified public V3, prior-day only for all 39 2026 trade labels |
+| NIFTY index 5-minute source | 2024–21Apr2026 pinned public + 22Apr–21Jul2026 public 1m resampled + 22Jul–05Nov2026 Upstox 1m resampled | Source boundaries documented; exchange independent validation at both seams still needed |
+| NIFTY daily front-month futures basis proxy | **359 daily spot/futures overlaps (Nov06 2024–Apr21 2026)** | **60 of 82 trades** labeled using strictly previous session; **22 trades unclassified** owing to absent continuous comparable futures reference through 2026 May–Nov |
 
-The existing read-only supplement: `aegis/upstox_active_gap_patch.py` (private local Analytics Token, never stored) generates a small `AEGIS_Upstox_Active_Patch.zip`. `aegis/stitch_active_patch.py` validates source hashes and produces compatible active-derivative Parquet. Safety and smoke tests run on the isolated branch.
+The final futures-basis diagnostic is **observational only**; it does not drive signal selection, resolve intraday forward IV or constitute a forward-model ablation. No continuous two-year historical one-minute futures order book was available.
 
-**Next milestone:** audit options data availability beyond simple presence, recover Oct28–30 futures separately if intraday futures basis is required, resolve the late-2024 contract lot-size transition, NSE session/cost validation and genuine untouched future holdout. **Do not optimize on these already-observed 2026 results and describe them as out-of-sample.**
+## 4. Exchange rules that were actually implemented
 
+- NSE circular **NSE/FAOP/64625**: NIFTY lot 25 → 75, date-effective 2024–2025 contract transition. Existing weekly expiry 19-Dec-2024 and existing monthly expiry 30-Jan-2025 retain 25; weekly expiry 02-Jan-2025 and monthly 27-Feb-2025 first move to 75. The replay no longer silently excludes Nov20–Dec31 2024; model uses **contract expiry** to determine ordinary weekly/monthly lot.
+  https://nsearchives.nseindia.com/content/circulars/FAOP64625.pdf
+- NSE circular **NSE/FAOP/70616**: NIFTY 75 → 65 for 2026 new weekly/monthly expiry; first weekly 06-Jan-2026 and monthly 27-Jan-2026.
+  https://nsearchives.nseindia.com/content/circulars/FAOP70616.pdf
+- NSE circular **NSE/FAOP/68747**: regular NIFTY weekly/monthly expiry moves from Thursday to Tuesday for contracts expiring after August 2025; actual expiry read from contract market data, including holiday shifts. Full daily exchange contract-master validation remains unavailable.
+  https://nsearchives.nseindia.com/content/circulars/FAOP68747.pdf
+- NSE circular **NSE/FAOP/74467**: derivative market close extended 15:30 → 15:40 effective 03-Aug-2026. Candles are validated with date-effective 15:29/15:39 final minute starts. CAS equity-cash auction order matching is **not simulated**.
+  https://nsearchives.nseindia.com/content/circulars/FAOP74467.pdf
+- Option-sale **STT**: 0.10% until 31-Mar-2026, 0.15% from 01-Apr-2026 (NSE Finance Act 2026 schedule). Entry and exit charge dates handled separately for cross-boundary trades.
+  https://www.nseindia.in/static/products-services/equity-derivatives-securities-transaction-tax
+- NSE options premium exchange transaction charges: **0.03503%** through Feb 2026; **0.03553%** from Mar 2026 per Upstox published schedule. Brokerage, GST, SEBI fees and stamp duty are modeled using disclosed assumptions, **not audited broker contract notes**.
+  https://upstox.com/brokerage-charges/
 
-### 7 November 2026 — root-cause fix for the remaining NIFTY futures gap
+**Settlement:** Backtest forces square-off before option expiry to avoid exercise/settlement tax. Actual expiry settlement is not modeled. American/exercise assignment or actual bid/ask crosses are not simulated. The pre-expiry rule is a model restriction, not validation of exchange settlement mechanics.
 
-**Confirmed code defect:** In `upstox_active_gap_patch.py`, `regular_fo_bar()` compared every candle against the *options* start date (2026-11-02), including the November futures contract whose requested start date was 2026-10-28. The Oct28–30 futures candles were therefore excluded by local post-download filtering, regardless of whether Upstox returned them. The export reported success because it checked API errors and nonempty CSV files but not per-day completeness.
+## 5. Volatility, futures basis, and risk diagnostics
 
-- Corrected code passes the individual contract start date into the session validator, with an explicit Oct28/Oct30 futures regression test (commit d983919d52b058deb6f541492f1a904aa5929b7e).
-- Added `aegis/aegis_repair_oct_futures.py`, standalone Python read-only script. It opens the existing small active-market-data ZIP, identifies the exact Nov23 NIFTY future key from the checksum-verified sidecar, retrieves only Oct28–30 1-minute candles, merges without altering earlier records or options CSVs, verifies exactly 385 timestamp-distinct minute bars on every required trading date Oct28–Nov05, and saves a new `AEGIS_Upstox_Active_Patch_Repaired.zip`. On an incomplete response it produces a token-free diagnostic report and DOES NOT claim completion.
-- Offline integration/regression/standalone tests passed: https://github.com/amitabhkumar/hello-world1/actions/runs/42277113892
-- **Status:** script validated on synthetic market-data responses; the three real trading-day rows must still be authenticated through the user's private local Upstox Analytics Token. Do not claim the gap filled until the repaired archive is uploaded and audited.
-- There is no need to re-export 285 options or the previous 95 MB archive. Futures do not enter the current v0.1 option-candle engine; this patch improves dataset completeness for later futures/basis studies.
+- All **39/39** modeled 2026 trades now have a prior-session India VIX label, with no same-day future information.
+- Across both years, prior-day VIX >=20 labeled **8 trades, +₹19,397.81** net; normal VIX labeled **74 trades, −₹67,288.70**. Eight high-VIX observations is a very small sample; dropping the biggest winner reverses that subset's outcome.
+- Daily prior-session front-month futures basis was available for **60 trades**, unavailable for **22**. Basis classification is correlation, **not** evidence that futures-basis filtering produces a profitable strategy. Missing near-month continuous 2026 May–Nov futures reference prevents a full-window future-input strategy evaluation.
+- Research includes modeled holding-day, overnight/weekend, next-session gap, downside tail and rolling/period cohort diagnostics, but **does not** reconstruct continuous mark-to-market and intraday exchange margin calls.
 
-### 7 November 2026 — audited failure of first Oct futures repair and guarded connectivity diagnostic
+## 6. Scope of completion and hard validation gates
 
-The user-provided token-free `AEGIS_oct_futures_repair_report.json` shows **28 API attempts**: one V3 range + three V3 day-specific + three V2 day-specific, each retried four times, and **all seven request groups failed with generic `Upstox historical endpoint connection failed`**. There were **no HTTP status codes, returned rows or rejected candle rows** in the report. Therefore the exact network reason is unknown; do not speculate that the market-data date is unavailable. Oct28–30 FUT records remain at zero and the 1540 previously verified Nov02–05 bars remain unchanged.
+| Requirement | Final status |
+|---|---|
+| Retrieve and verify original and active 2026 derivative ZIPs | **COMPLETE** |
+| Resolve 2026 Nov options and Oct28–30 futures session gaps | **COMPLETE** |
+| Export source derivatives to validated Parquet | **COMPLETE** |
+| Fill India VIX 2026 Jan–Nov source and prior-day labels | **COMPLETE** |
+| Correct 2024–2026 NIFTY lot transitions, expiry and time/fee rules | **Implemented and regression tested for ordinary weekly/monthly contracts**; daily exchange master audit still pending |
+| Run rolling Nov2024–Nov2026 OHLC backtest | **COMPLETE** (82 trades, negative) |
+| Analyze costs, drawdowns, tail risk, regimes, gap/overnight sensitivity | **COMPLETE on modeled trade ledgers** |
+| Integrate *available* historical daily futures basis for diagnostic purposes | **COMPLETE for 60/82 trades**; full intraday coverage not available |
+| Verify historical bid/ask and market depth at entry/exit | **BLOCKED: not in supplied historical API data** |
+| Full NSE daily contract-master and settlement replay | **BLOCKED: original historical daily master/settlement data not verified** |
+| Full original institutional strategy fidelity | **NOT ESTABLISHED: original detailed executable AEGIS specification not present in repo** |
+| Genuinely untouched future holdout | **NOT POSSIBLE as of this evidence cut-off; 2026 repeatedly observed** |
+| Profitable, execution-robust, deployable strategy | **FAILED** |
 
-The original repair script concealed the underlying `URLError` / `TimeoutError` cause and repeatedly exhausted 28 requests. This design has been corrected (commit `535472f5e3031ad51d1d11be06ddba2a81601ae7`):
-- `python aegis_repair_oct_futures.py --diagnose` makes one **unauthenticated** HTTPS connectivity request; logs sanitized DNS/TLS/proxy/timeout failure categories, never credentials or full proxy URLs, to `AEGIS_upstox_connectivity_diagnostic.json`.
-- Normal retrieval checks HTTPS transport **before requesting the user's private Analytics Token**.
-- A repeated network failure stops the fallback loop promptly instead of 28 blind calls; error category, errno/Windows code if available, is stored in the token-free repair report.
-- CI self-tests for original ZIP preservation, three-day coverage and the new diagnostics passed: https://github.com/amitabhkumar/hello-world1/actions/runs/42329044334
+### Decision
 
-**No live Oct28–30 futures recovered yet.** The exact source of the network failure requires the user's local network diagnostic and, only after transport is confirmed, a controlled authenticated one-request test. The current 39-trade options-candle backtest **does not use futures basis**.
+**Stop treating AEGIS v0.1 as a validated trading strategy.** The rolling historical evidence is negative and worsens under adverse execution assumptions. This is a **completed and reproducible negative research result** for the documented simplified A/B/C model, not a reason to invent a profitable result or claim live-readiness.
 
+Future research, if pursued, should be defined as a **new, pre-registered strategy version** with real quote/depth and contract-master provenance, controlled risk/entry logic, and *future unseen* sessions. No retrospective rule changes to these inspected years should be represented as out-of-sample proof.
 
-## 7 November 2026 — final October futures resolution and independent token-free recovery
+## Archived context
 
-**The 28–30 October 2026 NIFTY November futures minute-bar gap has now been closed by actual source data.** The preflight diagnostic supplied by the user established that `api.upstox.com` was reachable via HTTPS (HTTP 200), no proxy was present, and no token was used. The root cause of 28 local historical request connection failures was not determined, but a separately isolated GitHub runner successfully queried Upstox **Historical Candle V3 without an authorization token** and received 750 candles each for an official sample equity and NIFTY index history. This observation does not guarantee unauthenticated access on future dates or to other instrument keys.
-
-An isolated runner then opened only the user's existing 4.59 MB active ZIP via a temporary encrypted handoff, read the existing November 23 NIFTY futures contract key from its SHA-verified CSV sidecar, and fetched **1,155 real new October 28–30 futures minute candles in one Upstox V3 request** (HTTP 200, success). Data were merged with the existing 1,540 November 02–05 futures candles without altering any prior candle values or option data. Exactly **2,695** futures observations covered **seven verified trading sessions** (Oct28, Oct29, Oct30, Nov02, Nov03, Nov04 and Nov05), with 385 unique minute bars each. A new repaired market ZIP passed **286/286** original market contract SHA checks, with zero invalid OHLC or out-of-session observations.
-
-- **Recovery execution (success):** https://github.com/amitabhkumar/hello-world1/actions/runs/42330977469
-- **Repaired futures and options ZIP, forensic audit and repair report** (GitHub artifact wrapper containing the repaired archive): https://drive.google.com/file/d/1UH6tRxbkMSJlhZ3USgHFWIJjKWTBvasJ/view
-- **Final token-free Parquet ingestion (success):** https://github.com/amitabhkumar/hello-world1/actions/runs/42331212071
-- **Final reconciled options/futures Parquet and audit** (376,301 active option + 2,695 November futures minute bars): https://drive.google.com/file/d/1nTf-YOcbEA4ID3Igiq0Kg88YEbNNlMz5/view
-- **No further action from the user:** neither Upstox token nor another local export/upload was needed for the final recovery.
-
-| Session | NIFTY Nov23 futures 1m records | Integrity |
-|---|---:|---|
-| 2026-10-28 | 385 | Verified |
-| 2026-10-29 | 385 | Verified |
-| 2026-10-30 | 385 | Verified |
-| 2026-11-02 | 385 | Verified |
-| 2026-11-03 | 385 | Verified |
-| 2026-11-04 | 385 | Verified |
-| 2026-11-05 | 385 | Verified |
-| **Total** | **2,695** | **Passed** |
-
-**Important model boundary:** The existing v0.1 AEGIS 2026 option-only candle backtest (39 trades, modeled net ₹458.21) does **not** use intraday futures basis. Therefore obtaining the missing futures data does not require or imply a change to that backtest P&L. These futures can now be used for future/basis/forward-moneyness research. The other research issues — contract/lot/settlement rules, older 2026 VIX, prospective holdout, and absence of executable bid/ask — remain.
+Older research/audit reports, logs and incremental missing-data corrections remain on this branch, but this register and the final ZIP linked above supersede their preliminary readiness claims.
