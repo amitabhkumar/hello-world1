@@ -299,6 +299,10 @@ def run(year,files,support,out):
         spread,reason=select(day,features,dates,raw)
         if spread is None:
             skips.append({"date":str(day),"reason":reason});continue
+        if spread["expiry"]>latest_index_day:
+            # Avoid right-censoring: future trading sessions and expiry payoff
+            # have not occurred in the pinned historical data.
+            skips.append({"date":str(day),"reason":"unobserved_expiry_after_historical_cutoff"});continue
         if spread["expiry"] in used_expiries:
             skips.append({"date":str(day),"reason":"one_trade_per_option_expiry"});continue
         # Causality: no future entry prices until candidate frozen above.
@@ -398,7 +402,7 @@ def run(year,files,support,out):
       "results":stats(ledger),
       "overnight":stats(ledger[ledger.overnight]) if len(ledger) else {"trades":0},
       "regime":{name:stats(x) for name,x in ledger.groupby("regime")} if len(ledger) else {},
-      "exit_reasons":rej.reason.value_counts().to_dict(),
+      "skip_reasons":rej.reason.value_counts().to_dict(),
       "actual_exits":ledger.exit_reason.value_counts().to_dict() if len(ledger) else {},
       "unpriced_exits_penalized":int(ledger.missing_exit_full_loss_penalty.sum()) if len(ledger) else 0,
       "stresses":{key:round(float(ledger[key].sum()),2) if len(ledger) else 0.
@@ -410,7 +414,7 @@ def run(year,files,support,out):
       "win":summary["results"].get("win_rate"),
       "regime":summary["regime"],
       "stress":summary["stresses"],"overnight":summary["overnight"],
-      "skip":summary["exit_reasons"],"close":summary["actual_exits"],
+      "skip":summary["skip_reasons"],"close":summary["actual_exits"],
       "penalized":summary["unpriced_exits_penalized"]},default=str),flush=True)
 
 def main():
