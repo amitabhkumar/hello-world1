@@ -1,0 +1,96 @@
+name: AEGIS 4.0 frozen multi-session NIFTY swing 2024–2025
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths: ['.github/workflows/aegis4-public-swing.yml','aegis/aegis4_swing.py']
+  workflow_dispatch:
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2024, 2025]
+    timeout-minutes: 55
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install public-parquet quote analysis
+        run: python -m pip install --retries 7 --timeout 40 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2' 'pyarrow>=17,<24'
+      - name: Confirm multi-night swing engine and source gating
+        run: |
+          python -m py_compile aegis/aegis4_swing.py
+          python - <<'PY'
+          import datetime as dt,pandas as pd
+          from aegis import aegis4_swing as m
+          assert (m.ENTRY_MIN_DTE,m.ENTRY_MAX_DTE)==(3,9)
+          assert m.MAX_LOSS==10000 and m.MAX_OPEN_TRADES==1
+          assert m.CAS==dt.date(2026,8,3)
+          assert m.SIGNALS==("09:46","10:06","10:16","14:40","14:46")
+          today=dt.date(2026,11,2);tomorrow=dt.date(2026,11,3)
+          expiry=tomorrow
+          spread={"short":{"k":24000,"typ":"PE"},"hedge":{"k":23900,"typ":"PE"},
+                  "qty":65,"expiry":expiry,"entry_date":today,"entry_vix":18,
+                  "direction":1,"width":100}
+          def frame(day,rows):
+              return pd.DataFrame([
+                {"date":day,"expiry":expiry,"strike":strike,"typ":"PE",
+                 "hm":hm,"px":px,"volume":20,"oi":10000}
+                for hm,short,hedge in rows for strike,px in ((24000,short),(23900,hedge))])
+          market={
+            today:frame(today,[("14:40",30,10),("14:46",30,10)]),
+            tomorrow:frame(tomorrow,[("10:06",12,5),("10:16",12.5,5.1),
+                                   ("14:40",8,3),("14:46",8,3)])}
+          entry=[(30.,10000.),(10.,10000.)]
+          features={today:{"vix":18,"spot":24400},
+                    tomorrow:{"vix":18.1,"spot":24400}}
+          day,marks,label,_=m.choose_exit(spread,entry,[today,tomorrow],features,market)
+          assert day==tomorrow and label=="swing_profit_take",(day,label)
+          assert marks is not None
+          assert (day-today).days==1
+          print("AEGIS4_SWING_REGRESSION_PASSED: held overnight and exited on next-session observed 10:06 signal/10:16 marks")
+          PY
+      - name: Download previously SHA-pinned NIFTY option 1-minute year
+        run: python aegis/download_intraday_one.py --year ${{ matrix.year }}
+      - name: Retrieve pinned NIFTY five-minute index and India VIX
+        run: python aegis/download_market_context.py
+      - name: Execute frozen true multi-session-to-expiry strategy
+        env:
+          TZ: Asia/Kolkata
+          AEGIS_YEAR: ${{ matrix.year }}
+        run: |
+          python -m aegis.aegis4_swing \
+            --year ${{ matrix.year }} \
+            --parquet AEGIS_INTRADAY_${{ matrix.year }}/NIFTY_${{ matrix.year }}.parquet \
+            --support AEGIS_SUPPORT --out AEGIS4_${{ matrix.year }}
+          python - <<'PY'
+          import json,os,pathlib,pandas as pd
+          y=int(os.environ["AEGIS_YEAR"])
+          root=pathlib.Path(f"AEGIS4_{y}")
+          r=json.loads((root/f"AEGIS4_swing_summary_{y}.json").read_text())
+          assert r["year"]==y and r["option_session_days"]>25
+          assert r["risk_cap_rs"]==10000
+          assert r["single_entry_per_expiry"]
+          t=pd.read_csv(root/f"AEGIS4_swing_trades_{y}.csv")
+          if len(t):
+              assert (t.vix_prior_date.astype(str)<t.date.astype(str)).all()
+              assert (t.max_contract_risk_rs<=10000.01).all()
+              assert (t.entry_clock=="10:16").all()
+              assert (t.short_signal_oi>=5000).all()
+              assert (t.hedge_signal_oi>=5000).all()
+          print("AEGIS4_YEAR_QA",json.dumps({"year":y,"n":len(t),"results":r["results"],
+              "overnight":r["overnight"],"regime":r["regime"],
+              "stresses":r["stresses"],"exit":r["actual_exits"]},default=str),flush=True)
+          PY
+      - name: Preserve reproducible year-specific swing research and source SHA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS4_FROZEN_NIFTY_SWING_${{ matrix.year }}
+          path: |
+            AEGIS4_${{ matrix.year }}/
+            AEGIS_INTRADAY_${{ matrix.year }}/ingest_manifest.json
+          if-no-files-found: warn
+          retention-days: 90
