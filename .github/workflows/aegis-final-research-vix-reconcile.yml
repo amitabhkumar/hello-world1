@@ -1,0 +1,67 @@
+name: AEGIS final consolidated two-year research and complete 2026 VIX
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-final-research-vix-reconcile.yml'
+      - 'aegis/relabel_2026_vix.py'
+  workflow_dispatch:
+jobs:
+  final:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42332119695
+          name: AEGIS_NIFTY_2024_2026_EXECUTED_COMPLETE_RESEARCH
+          path: PREVIOUS
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42332475921
+          name: AEGIS_2026_COMPLETE_INDIA_VIX_RESEARCH_CONTEXT
+          path: VIX
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reconcile 2026 prior-day India VIX, without changing fills or P&L
+        run: |
+          python -m aegis.relabel_2026_vix \
+            --research PREVIOUS/AEGIS_TWO_YEAR_COMPLETE \
+            --vix VIX/AEGIS_VIX_2026_COMPLETE \
+            --out AEGIS_2024_2026_FINAL
+      - name: Assert all-year 2026 VIX data and no monetary/model change
+        run: |
+          python - <<'PY'
+          import pathlib,json,pandas as pd
+          before=json.loads(pathlib.Path("PREVIOUS/AEGIS_TWO_YEAR_COMPLETE/AEGIS_FULL_TWO_YEAR_RESEARCH_EVIDENCE.json").read_text())
+          after=json.loads(pathlib.Path("AEGIS_2024_2026_FINAL/AEGIS_FULL_TWO_YEAR_RESEARCH_EVIDENCE.json").read_text())
+          check=after["vix_2026_reconciliation"]
+          assert after["all"]==before["all"]
+          assert after["by_year"]==before["by_year"]
+          assert check["source_distinct_days"]==209,check
+          assert check["source_1m_candles"]==78375,check
+          assert check["2026_trades_with_prior_vix"]==39,check
+          assert check["2026_trades_without_prior_vix"]==0,check
+          print("AEGIS_RESEARCH_FINAL_COMPLETE",json.dumps({"all":after["all"],
+                   "vix_reconciliation":check,"by_vix_regime":after["by_vix_regime"]},
+                   default=str),flush=True)
+          PY
+      - name: Publish final research package and source checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS_NIFTY_FULL_2024_2026_FINAL_WITH_VIX_AND_EXCHANGE_RECONCILIATION
+          path: |
+            AEGIS_2024_2026_FINAL/
+            VIX/AEGIS_VIX_2026_COMPLETE/
+            PREVIOUS/YEAR_2024/AEGIS_BACKTEST_2024/
+            PREVIOUS/YEAR_2025/AEGIS_BACKTEST_2025/
+            PREVIOUS/YEAR_2024/AEGIS_INTRADAY_2024/ingest_manifest.json
+            PREVIOUS/YEAR_2025/AEGIS_INTRADAY_2025/ingest_manifest.json
+          retention-days: 90
