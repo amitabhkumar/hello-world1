@@ -88,6 +88,21 @@ def run(args):
     if trades.duplicated("date").any():raise AssertionError("Overlapping opening trades")
     for prev,next_ in zip(trades.itertuples(),list(trades.itertuples())[1:]):
         assert str(prev.exit_date)<str(next_.date),("Overlapping open swing trades",prev,next_)
+    # Independent post-execution, unchanged-trade Greek scenario audit.
+    # A 500/600-point move makes a local Taylor model inaccurate once the
+    # short and long strike are crossed; NEVER interpret these as actual
+    # future option values, broker stop fills or hard expiry loss limits.
+    greek_shocks={}
+    for shift in (-600,-500,500,600):
+        for iv_change in (-10,0,10):
+            vals=(trades.Delta_lot*shift+
+                  .5*trades.Gamma_lot*(shift**2)+
+                  trades.Vega_rupees_ivpoint*iv_change)
+            greek_shocks[f"spot_{shift:+}_IV_{iv_change:+}_volpts"]={
+              "count":int(len(vals)),
+              "median_local_Taylor_rs":round(float(vals.median()),2),
+              "worst_local_Taylor_rs":round(float(vals.min()),2),
+              "warning":"Local Greek approximation breaks down for 500/600-point moves; NOT executable option P&L"}
     all_=report(trades)
     per_year={str(y):report(trades[trades.date.str[:4]==str(y)]) for y in (2024,2025,2026)}
     cas={k:report(v) for k,v in trades.groupby("regime")}
@@ -140,6 +155,7 @@ def run(args):
       "all":all_,"by_year":per_year,"by_CAS_regime":cas,
       "by_exit_reason":exits,"by_option_spread_type":sides,
       "annual_source_quality":summaries,
+      "extreme_500_600_spot_IV_plus_minus_10pt_Greek_scenarios_NOT_REALIZED":greek_shocks,
       "all_skips":pd.concat(skips,ignore_index=True).reason.value_counts().to_dict(),
       "previous_AEGIS3_same_day_comparator":{
           "trades":22,"net_pnl_rs":-7213.22,
@@ -177,6 +193,10 @@ def run(args):
         f"- IID 95% mean-trade bootstrap interval INR{all_['uncertainty']['iid95_mean_trade_rs']}.",
         f"- Month-block 95% mean-trade bootstrap interval INR{all_['uncertainty']['month_block95_mean_trade_rs']}.",
         f"- Wilson 95% winning-proportion interval {all_['uncertainty']['wilson95_win_rate']}.",
+        "",
+        "## Indicative +/-500/600-point and +/-10 IV-vol-point Greek shocks",
+        "- The final evidence JSON includes per-scenario median/worst local Delta-Gamma-Vega projections for the recorded entries.",
+        "- These are **NOT** actual executable P&L or even valid large-shock option prices: a short vertical's curvature changes nonlinearly across the strikes. Actual contractual expiry risk is bounded; pre-expiry liquidity/exit losses are not proven.",
         "",
         "## Data, Greeks, CAS and settlement discipline",
         "- India VIX prior-session level/trend/percentile; historical option OI growth and liquidity, estimated BS option IV, Delta, Gamma, Theta, Vega and 10-day realized volatility are required on every entry.",
