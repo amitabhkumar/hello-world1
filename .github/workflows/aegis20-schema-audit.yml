@@ -52,7 +52,7 @@ jobs:
                FROM read_parquet('{path}')""").fetchone()
              print("AEGIS20_SOURCE_STATS",label,json.dumps(result,default=str),flush=True)
              ts="timestamp"
-             q=db.execute(f"""SELECT strftime({ts},'%H:%M') time,
+             q=db.execute(f"""SELECT strftime({ts},'%H:%M') as trade_minute,
                COUNT(*) n,COUNT(*) FILTER(WHERE TRY_CAST({f} AS DOUBLE)>0) positive_oi,
                COUNT(*) FILTER(WHERE TRY_CAST({v} AS DOUBLE)>0) positive_volume
                FROM read_parquet('{path}')
