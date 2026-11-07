@@ -29,6 +29,9 @@ import io
 import json
 from pathlib import Path
 import time
+import socket
+import ssl
+import urllib.request
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -43,6 +46,62 @@ COLUMNS = ("timestamp","open","high","low","close","volume","oi")
 NEEDED = (dt.date(2026,10,28),dt.date(2026,10,29),dt.date(2026,10,30))
 DAYS = (*NEEDED,dt.date(2026,11,2),dt.date(2026,11,3),dt.date(2026,11,4),dt.date(2026,11,5))
 DAY_BARS = 385  # trading-session minute-bar starts from 09:15 through 15:39 inclusive.
+
+def safe_error(error):
+    """Redact server URLs, proxy credentials and token; retain failure category."""
+    reason = error.reason if isinstance(error, URLError) else error
+    result = {"error_class":type(error).__name__, "reason_class":type(reason).__name__}
+    for key in ("errno", "winerror"):
+        value=getattr(reason,key,None)
+        if isinstance(value,int):
+            result[key]=value
+    if isinstance(reason,ssl.SSLError):
+        code=getattr(reason,"reason",None)
+        if isinstance(code,str) and code.replace("_","").isalnum():
+            result["ssl_reason"]=code
+    return result
+
+class NetworkFailure(RuntimeError):
+    def __init__(self,detail):
+        self.detail=detail
+        super().__init__("History connection unavailable ("+
+                         detail["reason_class"]+
+                         (", code "+str(detail.get("winerror") or detail.get("errno"))
+                            if detail.get("winerror") or detail.get("errno") else "")+")")
+
+def connection_probe():
+    """One unauthenticated HTTPS request, no local proxy addresses or credentials logged."""
+    report={"host":"api.upstox.com","token_used":False,
+            "proxy_environment_present":bool(urllib.request.getproxies()),
+            "https":"unknown","checked_at_utc":dt.datetime.now(dt.timezone.utc).isoformat()}
+    request=Request(BASE_URL+"/v2/swagger-ui/index.html",method="GET",
+        headers={"User-Agent":"AEGIS-Network-Diagnostic/1.0","Accept":"text/html"})
+    try:
+        with urlopen(request,timeout=12) as response:
+            report["https"]="reachable"
+            report["http_status"]=int(response.status)
+    except HTTPError as error:
+        # Any real HTTP status confirms DNS+TCP+TLS/HTTPS success, even 404/403.
+        report["https"]="reachable"
+        report["http_status"]=int(error.code)
+    except (URLError,TimeoutError,OSError) as error:
+        report["https"]="unreachable"
+        report["error"]=safe_error(error)
+    if report["https"]!="reachable":
+        try:
+            socket.getaddrinfo("api.upstox.com",443,type=socket.SOCK_STREAM)
+            report["dns"]="resolved"
+        except OSError as error:
+            report["dns"]="failed"
+            report["dns_error"]=safe_error(error)
+        try:
+            with socket.create_connection(("api.upstox.com",443),timeout=5) as raw:
+                with ssl.create_default_context().wrap_socket(raw,server_hostname="api.upstox.com") as secured:
+                    report["direct_tls"]="success" if secured.version() else "unknown"
+        except (OSError,ssl.SSLError) as error:
+            report["direct_tls"]="failed"
+            report["direct_tls_error"]=safe_error(error)
+    return report
 
 def digest(content):
     return hashlib.sha256(content).hexdigest()
@@ -154,11 +213,14 @@ class ReadOnlyHistory:
                     time.sleep(2**attempt * 3)
                     continue
                 raise RuntimeError("Upstox historical endpoint HTTP "+str(e.code)) from None
-            except (URLError,TimeoutError):
-                if attempt<3:
-                    time.sleep(2**attempt * 2)
+            except (URLError,TimeoutError,OSError) as error:
+                detail=safe_error(error)
+                # A DNS/TLS/proxy error is almost never solved by changing the
+                # trading DATE or by retrying 7 different API paths 28 times.
+                if attempt<1:
+                    time.sleep(2)
                     continue
-                raise RuntimeError("Upstox historical endpoint connection failed") from None
+                raise NetworkFailure(detail) from None
         raise RuntimeError("Upstox request retry limit reached")
 
     def candles(self,key,first,last,version=3):
@@ -221,6 +283,11 @@ def repair(client,source_path,output_path,report_path):
                         nvalid+=1
                 report["retrievals"].append({"endpoint":label,"first":str(start),
                     "last":str(end),"returned":len(rows),"matching_rows":nvalid})
+            except NetworkFailure as e:
+                report["retrievals"].append({"endpoint":label,"first":str(start),
+                    "last":str(end),"network_error":e.detail})
+                report["network_blocked"]=True
+                break
             except RuntimeError as e:
                 report["retrievals"].append({"endpoint":label,"first":str(start),
                     "last":str(end),"error":str(e)})
@@ -313,6 +380,8 @@ def self_test():
         result=repair(Fake(),old_path,root/NEW_ZIP,root/REPORT_FILE)
         assert result["status"]=="complete",result
         assert result["rows_recovered"]==3*385,result
+        assert safe_error(URLError(socket.gaierror(-2,"test")))["reason_class"]=="gaierror"
+        assert safe_error(TimeoutError())["reason_class"]=="TimeoutError"
         with zipfile.ZipFile(root/NEW_ZIP) as z:
             assert z.read("AEGIS_Upstox_Active_Patch/options/2026-11-09/sample.csv")==b"dummy,content\n"
         with zipfile.ZipFile(old_path) as z:
@@ -325,10 +394,27 @@ def main():
     p.add_argument("--out",default=NEW_ZIP)
     p.add_argument("--report",default=REPORT_FILE)
     p.add_argument("--self-test",action="store_true")
+    p.add_argument("--diagnose",action="store_true",
+        help="One unauthenticated HTTPS connectivity check; NO token requested")
     args=p.parse_args()
     if args.self_test:
         self_test()
         return
+    if args.diagnose:
+        diagnosis=connection_probe()
+        Path("AEGIS_upstox_connectivity_diagnostic.json").write_text(
+            json.dumps(diagnosis,indent=2),encoding="utf-8")
+        print("AEGIS_CONNECTION_DIAGNOSTIC",json.dumps(diagnosis,indent=2),flush=True)
+        if diagnosis["https"]!="reachable":
+            raise SystemExit("Upstox HTTPS is not reachable; no token requested or candle API calls made")
+        print("HTTPS transport reachable; this does not prove historical data API eligibility.")
+        return
+    preflight=connection_probe()
+    if preflight["https"]!="reachable":
+        Path("AEGIS_upstox_connectivity_diagnostic.json").write_text(
+            json.dumps(preflight,indent=2),encoding="utf-8")
+        print("AEGIS_CONNECTION_DIAGNOSTIC",json.dumps(preflight,indent=2))
+        raise SystemExit("Preflight connection failed; no token requested and no data requests attempted")
     token=getpass.getpass("Read-only Upstox Analytics Token (hidden, never saved): ").strip()
     if not token:
         raise SystemExit("Missing private read-only token")
