@@ -111,3 +111,15 @@ The existing read-only supplement: `aegis/upstox_active_gap_patch.py` (private l
 - Offline integration/regression/standalone tests passed: https://github.com/amitabhkumar/hello-world1/actions/runs/42277113892
 - **Status:** script validated on synthetic market-data responses; the three real trading-day rows must still be authenticated through the user's private local Upstox Analytics Token. Do not claim the gap filled until the repaired archive is uploaded and audited.
 - There is no need to re-export 285 options or the previous 95 MB archive. Futures do not enter the current v0.1 option-candle engine; this patch improves dataset completeness for later futures/basis studies.
+
+### 7 November 2026 — audited failure of first Oct futures repair and guarded connectivity diagnostic
+
+The user-provided token-free `AEGIS_oct_futures_repair_report.json` shows **28 API attempts**: one V3 range + three V3 day-specific + three V2 day-specific, each retried four times, and **all seven request groups failed with generic `Upstox historical endpoint connection failed`**. There were **no HTTP status codes, returned rows or rejected candle rows** in the report. Therefore the exact network reason is unknown; do not speculate that the market-data date is unavailable. Oct28–30 FUT records remain at zero and the 1540 previously verified Nov02–05 bars remain unchanged.
+
+The original repair script concealed the underlying `URLError` / `TimeoutError` cause and repeatedly exhausted 28 requests. This design has been corrected (commit `535472f5e3031ad51d1d11be06ddba2a81601ae7`):
+- `python aegis_repair_oct_futures.py --diagnose` makes one **unauthenticated** HTTPS connectivity request; logs sanitized DNS/TLS/proxy/timeout failure categories, never credentials or full proxy URLs, to `AEGIS_upstox_connectivity_diagnostic.json`.
+- Normal retrieval checks HTTPS transport **before requesting the user's private Analytics Token**.
+- A repeated network failure stops the fallback loop promptly instead of 28 blind calls; error category, errno/Windows code if available, is stored in the token-free repair report.
+- CI self-tests for original ZIP preservation, three-day coverage and the new diagnostics passed: https://github.com/amitabhkumar/hello-world1/actions/runs/42329044334
+
+**No live Oct28–30 futures recovered yet.** The exact source of the network failure requires the user's local network diagnostic and, only after transport is confirmed, a controlled authenticated one-request test. The current 39-trade options-candle backtest **does not use futures basis**.
