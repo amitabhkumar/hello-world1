@@ -34,7 +34,7 @@ jobs:
         run: |
           python -m aegis.relabel_2026_vix \
             --research PREVIOUS/AEGIS_TWO_YEAR_COMPLETE \
-            --vix VIX/AEGIS_VIX_2026_COMPLETE \
+            --vix VIX \
             --out AEGIS_2024_2026_FINAL
       - name: Assert all-year 2026 VIX data and no monetary/model change
         run: |
@@ -59,7 +59,7 @@ jobs:
           name: AEGIS_NIFTY_FULL_2024_2026_FINAL_WITH_VIX_AND_EXCHANGE_RECONCILIATION
           path: |
             AEGIS_2024_2026_FINAL/
-            VIX/AEGIS_VIX_2026_COMPLETE/
+            VIX/
             PREVIOUS/YEAR_2024/AEGIS_BACKTEST_2024/
             PREVIOUS/YEAR_2025/AEGIS_BACKTEST_2025/
             PREVIOUS/YEAR_2024/AEGIS_INTRADAY_2024/ingest_manifest.json
