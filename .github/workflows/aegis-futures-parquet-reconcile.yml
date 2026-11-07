@@ -53,7 +53,7 @@ jobs:
             "total_futures_1m":2695,"new_futures_1m":1155,
             "active_options_1m_preserved":376301,
             "sha_verified_contracts":286,
-            "invalid_or_outside":audit["invalid_or_outside"],
+            "invalid_or_outside":audit["invalid_ohlc"]+audit["invalid_timestamp_or_session"],
             "already_completed_option_backtest_2026_net":458.21,
             "note":"Option-only v0.1 P&L unchanged; futures basis not consumed by option-only strategy; no historical bid-ask"}
           (root/"AEGIS_OCT2026_FUTURES_PARQUET_RECONCILIATION.json").write_text(json.dumps(report,indent=2))
