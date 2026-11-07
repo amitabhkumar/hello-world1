@@ -1,0 +1,88 @@
+name: AEGIS 3.0 final directional credit-strategy research decision
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths: ['.github/workflows/aegis3-final-research.yml','aegis/aegis3_final.py']
+  workflow_dispatch:
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42349954112
+          name: AEGIS3_FROZEN_CREDIT_2024
+          path: HIST2024
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42349954112
+          name: AEGIS3_FROZEN_CREDIT_2025
+          path: HIST2025
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42350015517
+          name: AEGIS3_CREDIT_2026_IV_GREEKS_OI_INDIA_VIX_CAS
+          path: HIST2026
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42342779596
+          name: AEGIS20_CAS_INDEX_2026_REALIZED_VIX_REGIME_COMPARISON
+          path: CAS
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Aggregate frozen 2024–2026 trades and calculate robust failure gates
+        run: |
+          python -m py_compile aegis/aegis3_final.py
+          python -m aegis.aegis3_final \
+            --y2024 HIST2024 --y2025 HIST2025 --y2026 HIST2026 \
+            --cas-index CAS/AEGIS20_CAS_VOLATILITY_EVIDENCE.json \
+            --out AEGIS3_FINAL
+      - name: Verify result integrity, no survivorship removal, and live-approval prohibition
+        run: |
+          python - <<'PY'
+          import json,pathlib,pandas as pd
+          root=pathlib.Path("AEGIS3_FINAL")
+          result=json.loads((root/"AEGIS3_FINAL_RESEARCH_EVIDENCE.json").read_text())
+          ledger=pd.read_csv(root/"AEGIS3_REPRODUCIBLE_TRADE_LEDGER_2024_2026.csv")
+          assert result["metrics"]["all"]["trades"]==len(ledger)
+          assert len(ledger)>=13
+          assert len(set(ledger.date))==len(ledger)
+          assert ledger.contract_max_loss_est_rs.le(10000.01).all()
+          assert ledger.theta_rs_day.gt(0).all() and ledger.gamma_units.lt(0).all()
+          assert ledger.vega_rs_ivpt.lt(0).all()
+          assert (ledger.vix_prior_date.astype(str)<ledger.date.astype(str)).all()
+          assert result["approval_gates"]["institutional_live_approved"] is False
+          assert result["source_years"]["2026"]["option_quote_dates"]>50
+          print("AEGIS3_EXECUTION_QA_PASSED",json.dumps({
+            "trades":len(ledger),"net":result["metrics"]["all"]["net_pnl_rs"],
+            "post_CAS":result["metrics"]["post_CAS_AugNov2026"],
+            "stress_1_5":result["metrics"]["all"].get("stress_slippage_1_5pct_net_rs"),
+            "stress_3pct":result["metrics"]["all"].get("stress_slippage_3pct_net_rs"),
+            "approval":result["approval_gates"]},default=str),flush=True)
+          PY
+      - name: Archive complete source audits, trade ledger, and research report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS3_NIFTY_2024_2026_COMPLETE_FROZEN_CREDIT_RESEARCH
+          path: |
+            AEGIS3_FINAL/
+            HIST2024/AEGIS3_2024/
+            HIST2025/AEGIS3_2025/
+            HIST2026/AEGIS3_2026/
+            HIST2026/AEGIS_STITCH/ingestion_report.json
+            HIST2026/AEGIS_STITCH/active_patch_ingestion.json
+            HIST2026/AEGIS20_active_source_audit.json
+            CAS/
+          if-no-files-found: warn
+          retention-days: 90
