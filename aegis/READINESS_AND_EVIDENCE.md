@@ -89,7 +89,7 @@ The active-contract patch enabled **one additional strategy trade worth +₹22,5
 | Historical contract calendars, expiry settlement and lot changes | **Partially modeled** | Full date-effective exchange-circular and daily calendar QA |
 | NSE CAS derivative sessions | **Date-effective session flags implemented** | Exchange event-by-event auction/settlement execution simulation is not implemented |
 | Options on Nov04–Nov05 | **Recovered and verified** | Date-level 1m coverage and 285 active-option contracts acquired; sparse strikes are not necessarily corruption |
-| Futures on Oct28–Nov05 | **Partially recovered** | Nov02–05 has 385 bars each; **Oct28, Oct29, Oct30 remain missing** compared with original NIFTY index sessions |
+| Futures on Oct28–Nov05 | **Fully recovered and verified** | **2,695 Nov23-contract one-minute bars**, 385 per trading day for Oct28–30 and Nov02–05; all 286 market CSV checksums passed |
 | Fully aligned futures basis/forward IV | **Not in AEGIS v0.1 strategy logic** | Build separately and run controlled ablation |
 | Historical executable bid/ask, market depth | **Missing** | Licensed quotes or an explicit proxy; current results have modeled adverse spreads |
 | Complete rolling two-year Nov06 2024–Nov05 2026 window | **Not yet demonstrated** | Historical lot-size transition Nov20–Dec31 2024 excluded, NSE session rules and 2026 futures October 28–30 still pending; executable bid/ask absent |
@@ -123,3 +123,29 @@ The original repair script concealed the underlying `URLError` / `TimeoutError` 
 - CI self-tests for original ZIP preservation, three-day coverage and the new diagnostics passed: https://github.com/amitabhkumar/hello-world1/actions/runs/42329044334
 
 **No live Oct28–30 futures recovered yet.** The exact source of the network failure requires the user's local network diagnostic and, only after transport is confirmed, a controlled authenticated one-request test. The current 39-trade options-candle backtest **does not use futures basis**.
+
+
+## 7 November 2026 — final October futures resolution and independent token-free recovery
+
+**The 28–30 October 2026 NIFTY November futures minute-bar gap has now been closed by actual source data.** The preflight diagnostic supplied by the user established that `api.upstox.com` was reachable via HTTPS (HTTP 200), no proxy was present, and no token was used. The root cause of 28 local historical request connection failures was not determined, but a separately isolated GitHub runner successfully queried Upstox **Historical Candle V3 without an authorization token** and received 750 candles each for an official sample equity and NIFTY index history. This observation does not guarantee unauthenticated access on future dates or to other instrument keys.
+
+An isolated runner then opened only the user's existing 4.59 MB active ZIP via a temporary encrypted handoff, read the existing November 23 NIFTY futures contract key from its SHA-verified CSV sidecar, and fetched **1,155 real new October 28–30 futures minute candles in one Upstox V3 request** (HTTP 200, success). Data were merged with the existing 1,540 November 02–05 futures candles without altering any prior candle values or option data. Exactly **2,695** futures observations covered **seven verified trading sessions** (Oct28, Oct29, Oct30, Nov02, Nov03, Nov04 and Nov05), with 385 unique minute bars each. A new repaired market ZIP passed **286/286** original market contract SHA checks, with zero invalid OHLC or out-of-session observations.
+
+- **Recovery execution (success):** https://github.com/amitabhkumar/hello-world1/actions/runs/42330977469
+- **Repaired futures and options ZIP, forensic audit and repair report** (GitHub artifact wrapper containing the repaired archive): https://drive.google.com/file/d/1UH6tRxbkMSJlhZ3USgHFWIJjKWTBvasJ/view
+- **Final token-free Parquet ingestion (success):** https://github.com/amitabhkumar/hello-world1/actions/runs/42331212071
+- **Final reconciled options/futures Parquet and audit** (376,301 active option + 2,695 November futures minute bars): https://drive.google.com/file/d/1nTf-YOcbEA4ID3Igiq0Kg88YEbNNlMz5/view
+- **No further action from the user:** neither Upstox token nor another local export/upload was needed for the final recovery.
+
+| Session | NIFTY Nov23 futures 1m records | Integrity |
+|---|---:|---|
+| 2026-10-28 | 385 | Verified |
+| 2026-10-29 | 385 | Verified |
+| 2026-10-30 | 385 | Verified |
+| 2026-11-02 | 385 | Verified |
+| 2026-11-03 | 385 | Verified |
+| 2026-11-04 | 385 | Verified |
+| 2026-11-05 | 385 | Verified |
+| **Total** | **2,695** | **Passed** |
+
+**Important model boundary:** The existing v0.1 AEGIS 2026 option-only candle backtest (39 trades, modeled net ₹458.21) does **not** use intraday futures basis. Therefore obtaining the missing futures data does not require or imply a change to that backtest P&L. These futures can now be used for future/basis/forward-moneyness research. The other research issues — contract/lot/settlement rules, older 2026 VIX, prospective holdout, and absence of executable bid/ask — remain.
