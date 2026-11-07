@@ -1,3 +1,13 @@
+# Superseding research: AEGIS 2.0 (7 November 2026)
+
+The original v0.1 research and its negative 82-trade results remain archived below, but the user's latest request requires **Delta, Gamma, Theta, Vega, IV, OI and India VIX** to be explicitly considered across multiple NIFTY F&O strategy families. That work has been implemented and executed as **AEGIS 2.0**, with three separately tested candidate families and an actual before/after CAS NIFTY 1-minute index range audit.
+
+**Current 2.0 decision and links:** [AEGIS20_READINESS_AND_EVIDENCE.md](https://github.com/amitabhkumar/hello-world1/blob/aegis-nifty-backtest/aegis/AEGIS20_READINESS_AND_EVIDENCE.md). **Result: no strategy approved for live trading.** The post-CAS trend subset is +₹6,250.25 across **only seven** retrospective trades (5 wins); full-period trend results remain negative. All historical 2026 performance is repeatedly inspected, not untouched OOS.
+
+**Final AEGIS 2.0 2024–2026 evidence ZIP:** https://drive.google.com/file/d/1ZFpHmeKkUQsYJfnr65ZusTbnOp8Nn_ov/view
+
+---
+
 # AEGIS NIFTY — Current research evidence and readiness decision
 
 **Evidence cut-off: 7 November 2026 (India, IST).**
