@@ -1,0 +1,61 @@
+name: AEGIS final prior-day NIFTY futures-basis diagnostic
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-final-futures-basis.yml'
+      - 'aegis/futures_basis_research.py'
+  workflow_dispatch:
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42332677918
+          name: AEGIS_NIFTY_FULL_2024_2026_FINAL_WITH_VIX_AND_EXCHANGE_RECONCILIATION
+          path: INPUT
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Retrieve independent checksum-pinned daily NIFTY futures/spot reference
+        run: python aegis/download_market_context.py
+      - name: Reconcile past-session futures basis without changing strategy choices
+        run: |
+          python -m aegis.futures_basis_research \
+            --research INPUT/AEGIS_2024_2026_FINAL \
+            --support AEGIS_SUPPORT \
+            --out AEGIS_FINAL_WITH_DAILY_FUTURES
+      - name: Assert model and money unchanged, record partial futures coverage
+        run: |
+          python - <<'PY'
+          import json,pathlib,pandas as pd
+          r=json.loads(pathlib.Path("AEGIS_FINAL_WITH_DAILY_FUTURES/AEGIS_FULL_TWO_YEAR_RESEARCH_EVIDENCE.json").read_text())
+          prior=json.loads(pathlib.Path("INPUT/AEGIS_2024_2026_FINAL/AEGIS_FULL_TWO_YEAR_RESEARCH_EVIDENCE.json").read_text())
+          f=r["futures_basis_research"]
+          assert r["all"]==prior["all"]
+          assert r["by_year"]==prior["by_year"]
+          assert f["trades_with_prior_daily_basis"]>20,f
+          assert f["trades_without_prior_daily_basis"]>0,f
+          assert f["future_lookahead"] is False
+          print("AEGIS_FUTURES_BASIS_DIAGNOSTIC_PASS",json.dumps({
+             "source_to":f["last"],"basis_assigned":f["trades_with_prior_daily_basis"],
+             "uncovered":f["trades_without_prior_daily_basis"],
+             "full_window_pnl_unchanged":r["all"]["net_pnl_rs"]},flush=True))
+          PY
+      - name: Publish integrated final research report and basis diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS_NIFTY_2024_2026_FINAL_COMPLETED_RESEARCH_ALL_DIAGNOSTICS
+          path: |
+            AEGIS_FINAL_WITH_DAILY_FUTURES/
+            INPUT/VIX/
+            INPUT/PREVIOUS/
+          if-no-files-found: ignore
+          retention-days: 90
