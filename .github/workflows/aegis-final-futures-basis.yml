@@ -47,7 +47,7 @@ jobs:
           print("AEGIS_FUTURES_BASIS_DIAGNOSTIC_PASS",json.dumps({
              "source_to":f["last"],"basis_assigned":f["trades_with_prior_daily_basis"],
              "uncovered":f["trades_without_prior_daily_basis"],
-             "full_window_pnl_unchanged":r["all"]["net_pnl_rs"]},flush=True))
+             "full_window_pnl_unchanged":r["all"]["net_pnl_rs"]}),flush=True)
           PY
       - name: Publish integrated final research report and basis diagnostics
         uses: actions/upload-artifact@v4
