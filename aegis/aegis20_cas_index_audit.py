@@ -76,7 +76,9 @@ def run(out,vix_file=None):
         bars=sorted(bars,key=lambda x:x[0])
         first,last=bars[0],bars[-1]
         h=max(x[2] for x in bars);l=min(x[3] for x in bars)
-        row={"date":str(day),"regime":"post_CAS_AugNov2026" if day>=CAS else "pre_CAS",
+        row={"previous_session_vix":None,"previous_session_vix_date":None,
+             "vix_regime":"unavailable",
+             "date":str(day),"regime":"post_CAS_AugNov2026" if day>=CAS else "pre_CAS",
              "first_minute":first[0].strftime("%H:%M"),
              "last_minute":last[0].strftime("%H:%M"),
              "minute_rows":len(bars),
@@ -121,7 +123,7 @@ def run(out,vix_file=None):
     print("AEGIS20_CAS_INDEX_EVIDENCE",json.dumps({
        "pre":result["pre_CAS_2026"],"post":result["post_CAS_AugNov2026"],
        "vix":result["by_vix_regime"],
-       "verified_minutes":len(observed),"days":len(rows)},flush=True))
+       "verified_minutes":len(observed),"days":len(rows)}),flush=True)
 def main():
     import argparse
     a=argparse.ArgumentParser()
