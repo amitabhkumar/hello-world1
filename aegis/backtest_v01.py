@@ -3,13 +3,17 @@
 
 This is NOT a bid/ask or fill-verified backtest. Trades use observed 1-minute
 OPENs with conservative modelled spreads and explicit fees. No order-book data.
-Rules fixed ex ante; 2026 data is held-out out-of-sample.
+The 2026 records were evaluated before; NOT an untouched out-of-sample sample.
 """
 from __future__ import annotations
 import argparse,datetime as dt,json,math,os,pathlib,statistics,sys
 import numpy as np
 import pandas as pd
 import duckdb
+try:
+    from aegis.exchange_rules import nifty_option_lot, option_stt_sale_rate, nse_option_transaction_rate, RESEARCH_START
+except ModuleNotFoundError:
+    from exchange_rules import nifty_option_lot, option_stt_sale_rate, nse_option_transaction_rate, RESEARCH_START
 
 START=dt.date(2024,10,1)
 END=dt.date(2026,11,5)  # full intended 2026 research window; options expire through Nov03
@@ -29,36 +33,36 @@ MODES={"A":{"take":0.40,"stop":0.35,"days":2},
        "BENCH_STRADDLE":{"take":999,"stop":999,"days":2}}
 
 def lot_size(trade_date, expiry):
-    # Exclude transitional expiry dates in late 2024 to avoid guessing sizes
-    if dt.date(2024,11,20)<=trade_date<=dt.date(2024,12,31):
-        return None
-    if trade_date < dt.date(2025,1,1):
-        return 25
-    if trade_date < dt.date(2026,1,1):
-        return 75
-    return 65
+    # Date-effective *contract-expiry* rule; NSE/FAOP/64625 & 70616.
+    return nifty_option_lot(trade_date, expiry)
 
 def adverse(mid,side):  # side +1 = buy, -1 = sell
     s=max(SLIP_FLOOR, abs(mid)*SLIP_PCT)
     return max(0.05, mid+side*s)
 
-def fees(trade_date,qty,legs,entries,exits):
-    # STT charged on executed option sales, not buys.
-    stt=0.0015 if trade_date>=dt.date(2026,4,1) else 0.0010
+def fees(trade_date,qty,legs,entries,exits,exit_date=None):
+    # STT is calculated on executed option sales using each execution date.
+    # Carrying across a rate boundary cannot use the entry-date rate for exits.
+    if exit_date is None: exit_date=trade_date
     brokerage=COMMISSION_PER_ORDER*len(legs)*2
-    turnover=0.0; sells=0.0; buys=0.0
+    turnover=0.0; sells=0.0; buys=0.0; stt=0.0
     for (typ,strike,sgn),p0,p1 in zip(legs,entries,exits):
         entry_cash=p0*qty; exit_cash=p1*qty
         turnover+=entry_cash+exit_cash
         if sgn==1:
             buys+=entry_cash; sells+=exit_cash
+            stt+=exit_cash*option_stt_sale_rate(exit_date)
         else:
             sells+=entry_cash; buys+=exit_cash
-    exchange=turnover*EXCH_RATE
+            stt+=entry_cash*option_stt_sale_rate(trade_date)
+    entry_turnover=sum(p*qty for p in entries)
+    exit_turnover=sum(p*qty for p in exits)
+    exchange=(entry_turnover*nse_option_transaction_rate(trade_date)
+              +exit_turnover*nse_option_transaction_rate(exit_date))
     sebi=turnover*SEBI_RATE
     gst=GST_RATE*(brokerage+exchange+sebi)
     stamp=buys*STAMP_BUY_RATE
-    return dict(brokerage=brokerage,stt=sells*stt,exchange=exchange,sebi=sebi,gst=gst,stamp=stamp,total=brokerage+sells*stt+exchange+sebi+gst+stamp)
+    return dict(brokerage=brokerage,stt=stt,exchange=exchange,sebi=sebi,gst=gst,stamp=stamp,total=brokerage+stt+exchange+sebi+gst+stamp)
 
 
 # Diagnostic Greeks; constant assumed annual r=6.5% and dividend yield q=1.2%.
@@ -144,7 +148,7 @@ def signals(spot,daily):
     result=[]
     for i in range(21,len(daily)):
         row=daily.iloc[i]; d=row.d
-        if d>END or d<START:continue
+        if d>END or d<RESEARCH_START:continue
         if row.candles<68: continue  # reject incomplete regular-session spot data
         bars=spot[spot.d==d].set_index("hm")
         if not all(x in bars.index for x in ("09:15","09:40","09:55","10:00")):continue
@@ -299,7 +303,8 @@ def run_one(con,candidates,days,year,benchmark=False):
         mean_iv=(round(statistics.mean(g["iv"] for sgn,g in valid_greeks),5) if len(valid_greeks)==len(legs) else None)
         exits=[adverse(m,-s) for m,(_,__,s) in zip(exitmid,legs)]
         gross_pnl=lots*sum(s*(out-en) for (_,__,s),en,out in zip(legs,ent,exits))
-        charged=fees(d,lots,legs,ent,exits)
+        exit_day=dt.date.fromisoformat(exitkey[:10])
+        charged=fees(d,lots,legs,ent,exits,exit_date=exit_day)
         net=gross_pnl-charged["total"]
         trade={**c,"date":str(d),"expiry":str(exp),"exit_timestamp":exitkey,
            "mode":mode,"exit_reason":reason,"atm":atm,"legs":str(legs),
@@ -375,7 +380,7 @@ def main():
       "source":"NIFTY traded 1m option OHLC; stitched 5m cash index; 2024-26 prior-day VIX where available",
       "model":f"one lot, {SLIP_PCT:.3%} premium or {SLIP_FLOOR:.2f} pt each execution leg, 20 rupees commission/leg/order, estimated taxes; no bid/ask",
       "lookahead":"Signal at 10:05, enter using 10:06 1-minute OPEN, 15m open-price monitoring; not an orderbook simulation",
-      "held_out":False,"holdout_caveat":"Previously evaluated 2026 data; revised 2026 results are exploratory and not a pristine holdout", "limitations":["No real bid/ask (Upstox options are OHLC)","2026 VIX unavailable before July 22","Upstox expiry derivatives missing Nov4-Nov5 options and Oct28-Nov5 futures","2024 Nov20-Dec31 excluded due contract-size transition","no genuine intraminute stop execution"]}
+      "held_out":False,"holdout_caveat":"Previously evaluated 2026 data; all years are retrospective and NOT pristine prospective OOS", "limitations":["No real bid/ask (Upstox options are OHLC)","2026 VIX unavailable before July 22","Jul-Nov2026 derivative sessions validated with supplementary original/active ZIPs","2024 NIFTY lot-size transitions computed from date-effective expiry schedule; historical daily contract master still authoritative","no genuine intraminute stop execution"]}
     (out/f"summary_{a.year}.json").write_text(json.dumps(stats,indent=2,default=str))
     print("AEGIS_RESULT",json.dumps(stats,default=str),flush=True)
 
