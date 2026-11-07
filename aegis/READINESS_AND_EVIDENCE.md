@@ -1,3 +1,17 @@
+# Current AEGIS status: AEGIS 4.0 NIFTY SWING (7 November 2026)
+
+**Latest user trading style: swing; multi-session holding to weekly expiry.** Built and executed a new overnight, defined-risk spread with India VIX, IV, observed OI growth and modeled Delta/Gamma/Theta/Vega. This fixes the prior mistake of forcing all short-premium trades to close the same day.
+
+**Executed full 2024–2026 result:** **39 overnight trades**, **25 wins (64.10%)**, **−₹9,644.27 modeled net**, **profit factor 0.643**, **maximum closed-trade drawdown ₹12,768.04**. Historical post-Aug CAS cohort **5/5 wins, +₹3,123.77**, but extremely small and NOT a verified edge. All 2026 periods have been inspected, not an untouched OOS evaluation.
+
+- [Full latest AEGIS4 swing specification, exact P&L, VIX/Greeks/OI, negative expectancy root cause and risk gates](https://github.com/amitabhkumar/hello-world1/blob/aegis-nifty-backtest/aegis/AEGIS4_SWING_READINESS_AND_EVIDENCE.md)
+- [Final AEGIS4 trade/skip ledger, research JSON, year source audit and report ZIP in Drive](https://drive.google.com/file/d/1SWqB6QN92wLe6adRsXH58H8hA0Rx8Hio/view)
+- [AEGIS4 successful consolidated runner with 39-trade and CAS validation](https://github.com/amitabhkumar/hello-world1/actions/runs/42352203783)
+
+**Readiness:** **REJECTED for live capital**. In-sample 64% winners still lost due average −₹1,930 loser vs +₹695 winner. The gross counterfactual expiry-settlement spot-close proxy (+₹2,360, pre-tax, not official) is **NOT** an executable verified alternative. Official NSE cash settlement, actual bid/ask and margin/overnight liquidations remain unverified.
+
+---
+
 # Latest experiment: AEGIS 3.0 — 7 November 2026
 
 **Most recent requested strategy built and executed:** trend-aligned **defined-risk bullish put / bearish call credit vertical**, with historical India VIX, IV, Delta/Gamma/Theta/Vega, actual OI change and volume, max initial risk ₹10,000, early exit before CAS and 1.5–3% slippage stress. **Executed 22 simulated trades, 5 wins (22.73%), −₹7,213.22 net** on 6-Nov-2024–5-Nov-2026. **Rejected for live deployment**. The independent trade postmortem found 20 EOD exits without ever reaching the 50% credit target and 2 premium stops; trading marks were negative gross **before** fees. Do not modify the results to make them look profitable.
