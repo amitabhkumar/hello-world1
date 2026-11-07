@@ -1,0 +1,158 @@
+name: AEGIS self-service recovery of three October futures sessions
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-public-futures-repair.yml'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate ephemeral audit-runner RSA key and announce public modulus
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/aegis-private.pem 2>/dev/null
+          openssl pkey -in /tmp/aegis-private.pem -pubout -out /tmp/aegis-public.pem
+          openssl rsa -pubin -in /tmp/aegis-public.pem -modulus -noout | sed 's/^Modulus=/AEGIS_RSA_MODULUS=/'
+          echo 'PRIVATE KEY IS IN THE RUNNER ONLY'
+      - name: Publish ephemeral public modulus, never the private key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,subprocess,base64,json,urllib.request
+          raw=subprocess.check_output(["openssl","rsa","-pubin","-in","/tmp/aegis-public.pem","-modulus","-noout"],text=True)
+          modulus=raw.strip().split("=",1)[1]
+          payload=json.dumps({"run_id":os.environ["GITHUB_RUN_ID"],"modulus_hex":modulus,
+              "exponent":65537,"scheme":"RSA-PKCS1v1_5-ephemeral"})
+          encoded=base64.b64encode(payload.encode()).decode()
+          body=json.dumps({"message":"Ephemeral public key for encrypted market-data handoff",
+               "content":encoded,"branch":"aegis-nifty-backtest"})
+          path="aegis/_private_handoff/pubkey_"+os.environ["GITHUB_RUN_ID"]+".json"
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/"+path
+          req=urllib.request.Request(url,data=body.encode(),method="PUT",
+                headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                  "Accept":"application/vnd.github+json","Content-Type":"application/json"})
+          with urllib.request.urlopen(req,timeout=30) as res:
+              print("Ephemeral public key published:",path,flush=True)
+          PY
+      - name: Receive encrypted temporary active-market-data ZIP
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json,os,subprocess,time,urllib.request,urllib.error
+          from urllib.parse import urlparse
+          endpoint="https://api.github.com/repos/amitabhkumar/hello-world1/contents/aegis/_private_handoff/futures-recovery.enc.json?ref=aegis-nifty-backtest"
+          for attempt in range(100):
+              try:
+                  req=urllib.request.Request(endpoint,headers={
+                    "Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                    "Accept":"application/vnd.github.raw+json",
+                    "Cache-Control":"no-cache","User-Agent":"AEGIS-private-data-transfer"})
+                  with urllib.request.urlopen(req,timeout=25) as res:
+                      payload=json.loads(res.read().decode("utf-8"))
+                  if payload.get("blocks"):break
+              except (urllib.error.HTTPError,urllib.error.URLError,ValueError):
+                  pass
+              time.sleep(5)
+          else:raise SystemExit("No encrypted market-data handoff received")
+          if payload.get("scheme")!="RSA-PKCS1v1_5-ephemeral" or payload.get("run_id")!=os.environ["GITHUB_RUN_ID"]:
+              raise SystemExit("Mismatched RSA transfer")
+          clear=[]
+          for block in payload["blocks"]:
+              proc=subprocess.run(["openssl","pkeyutl","-decrypt","-inkey","/tmp/aegis-private.pem",
+                    "-pkeyopt","rsa_padding_mode:pkcs1"],
+                    input=bytes.fromhex(block),stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+              clear.append(proc.stdout)
+          url=b"".join(clear).decode("utf-8")
+          parsed=urlparse(url)
+          if parsed.scheme!="https" or not parsed.hostname or not parsed.hostname.endswith(".oaiusercontent.com"):
+              raise SystemExit("Refused unauthorized ZIP host")
+          request=urllib.request.Request(url,headers={"User-Agent":"AEGIS-private-supplement-reader/1"})
+          n=0
+          with urllib.request.urlopen(request,timeout=120) as reply, open("AEGIS_Upstox_Active_Patch.zip","wb") as output:
+              while True:
+                  chunk=reply.read(1024*1024)
+                  if not chunk:break
+                  n+=len(chunk);output.write(chunk)
+          if not 4500000<=n<=5000000:raise SystemExit("Unexpected active supplement ZIP size")
+          print("Original active ZIP obtained safely, bytes",n,flush=True)
+          PY
+      - name: Recover only missing October futures with public Upstox V3, no token
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,urllib.request,urllib.error
+          from pathlib import Path
+          from aegis.aegis_repair_oct_futures import repair,OLD_ZIP,NEW_ZIP,REPORT_FILE
+          class PublicV3:
+              request_count=0
+              def candles(self,key,first,last,version=3):
+                  self.request_count+=1
+                  if version!=3:
+                      # Public V2 might be deprecated. Avoid unnecessary V2 calls if V3 works.
+                      return []
+                  from urllib.parse import quote
+                  url=f"https://api.upstox.com/v3/historical-candle/{quote(key,safe='')}/minutes/1/{last}/{first}"
+                  req=urllib.request.Request(url,method="GET",headers={
+                    "Accept":"application/json","User-Agent":"AEGIS-Public-ReadOnly-V3/1.0"})
+                  try:
+                      with urllib.request.urlopen(req,timeout=30) as reply:
+                          result=json.loads(reply.read().decode("utf-8"))
+                  except urllib.error.HTTPError as exc:
+                      raise RuntimeError(f"Upstox public historical API HTTP {exc.code}") from None
+                  except (urllib.error.URLError,TimeoutError) as exc:
+                      reason=getattr(exc,"reason",exc)
+                      raise RuntimeError("Upstox public historical API network: "+type(reason).__name__) from None
+                  bars=result.get("data",{}).get("candles",None)
+                  if result.get("status")!="success" or not isinstance(bars,list):
+                      raise RuntimeError("Upstox public history data/status mismatch")
+                  print("PUBLIC_V3_FUTURES",json.dumps({"from":str(first),"to":str(last),
+                    "response_status":result["status"],"bar_count":len(bars)}),flush=True)
+                  return bars
+          out=repair(PublicV3(),Path(OLD_ZIP),Path(NEW_ZIP),Path(REPORT_FILE))
+          if out["status"]!="complete":
+              raise SystemExit("Actual October futures remain incomplete; diagnostic report archived")
+          assert out["rows_recovered"]==1155,out
+          print("AEGIS_FUTURES_RECOVERED_3_DAYS",json.dumps({
+             "new_rows":out["rows_recovered"],"total_rows":out["rows_after"],
+             "api_requests":out["api_requests"]}),flush=True)
+          PY
+      - name: Independently verify repaired active ZIP
+        run: |
+          python aegis/audit_active_patch.py --patch AEGIS_Upstox_Active_Patch_Repaired.zip --out AEGIS_repaired_futures_market_audit.json
+          python - <<'PY'
+          import json,zipfile,pathlib
+          audit=json.load(open("AEGIS_repaired_futures_market_audit.json"))
+          report=json.load(open("AEGIS_oct_futures_repair_report.json"))
+          assert audit["status"]=="integrity_pass",audit
+          assert audit["sha256_csv_passed"]==286,audit
+          assert audit["futures"]["rows"]==2695,audit
+          assert all(v["bars"]==385 for v in report["after"].values()),report
+          assert not report["unresolved_dates"] and report["status"]=="complete",report
+          print("AEGIS_CLOSED_FUTURES_GAP_VERIFIED",json.dumps({
+            "repaired_sha_verified":audit["sha256_csv_passed"],
+            "futures_bars":audit["futures"]["rows"],
+            "futures_covered_dates":list(audit["futures"]["by_day"].keys()),
+            "options_bars":audit["options"]["rows"]}),flush=True)
+          PY
+      - name: Archive recovered futures market ZIP and token-free verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS_NIFTY_2026_OCT_FUTURES_VERIFIED_REPAIR
+          path: |
+            AEGIS_Upstox_Active_Patch_Repaired.zip
+            AEGIS_oct_futures_repair_report.json
+            AEGIS_repaired_futures_market_audit.json
+          retention-days: 90
+          if-no-files-found: warn
