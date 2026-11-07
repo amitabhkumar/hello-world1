@@ -1,3 +1,16 @@
+# Latest experiment: AEGIS 3.0 — 7 November 2026
+
+**Most recent requested strategy built and executed:** trend-aligned **defined-risk bullish put / bearish call credit vertical**, with historical India VIX, IV, Delta/Gamma/Theta/Vega, actual OI change and volume, max initial risk ₹10,000, early exit before CAS and 1.5–3% slippage stress. **Executed 22 simulated trades, 5 wins (22.73%), −₹7,213.22 net** on 6-Nov-2024–5-Nov-2026. **Rejected for live deployment**. The independent trade postmortem found 20 EOD exits without ever reaching the 50% credit target and 2 premium stops; trading marks were negative gross **before** fees. Do not modify the results to make them look profitable.
+
+- [AEGIS3 complete current readiness and quantified loss attribution](https://github.com/amitabhkumar/hello-world1/blob/aegis-nifty-backtest/aegis/AEGIS3_READINESS_AND_EVIDENCE.md)
+- [Complete third-generation research ZIP in user AEGIS Drive folder](https://drive.google.com/file/d/1fG8qyUQio5U9_KgfhYq03nsSfkarCoSn/view)
+- [Verified final AEGIS3 GitHub historical replay](https://github.com/amitabhkumar/hello-world1/actions/runs/42350347322)
+- [Detailed exit-price and fee postmortem](https://drive.google.com/file/d/13LYtBuTkNKtL2hO9ril_DtaA5mhhdnlK/view)
+
+**Status:** The requested historical research run has completed, but **no 1.0, 2.0 or 3.0 design has been shown to achieve reliable high win rate or positive expectancy**. 2026 historical data have been reviewed repeatedly, not pristine OOS. Future CAS changes remain unobserved.
+
+---
+
 # Superseding research: AEGIS 2.0 (7 November 2026)
 
 The original v0.1 research and its negative 82-trade results remain archived below, but the user's latest request requires **Delta, Gamma, Theta, Vega, IV, OI and India VIX** to be explicitly considered across multiple NIFTY F&O strategy families. That work has been implemented and executed as **AEGIS 2.0**, with three separately tested candidate families and an actual before/after CAS NIFTY 1-minute index range audit.
