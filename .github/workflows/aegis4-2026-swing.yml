@@ -1,0 +1,179 @@
+name: AEGIS 4.0 NIFTY multi-day swing expiry-risk 2026
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis4-2026-swing.yml'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate ephemeral audit-runner RSA key and announce public modulus
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/aegis-private.pem 2>/dev/null
+          openssl pkey -in /tmp/aegis-private.pem -pubout -out /tmp/aegis-public.pem
+          openssl rsa -pubin -in /tmp/aegis-public.pem -modulus -noout | sed 's/^Modulus=/AEGIS_RSA_MODULUS=/'
+          echo 'PRIVATE KEY IS IN THE RUNNER ONLY'
+      - name: Publish ephemeral public modulus, never the private key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,subprocess,base64,json,urllib.request
+          raw=subprocess.check_output(["openssl","rsa","-pubin","-in","/tmp/aegis-public.pem","-modulus","-noout"],text=True)
+          modulus=raw.strip().split("=",1)[1]
+          payload=json.dumps({"run_id":os.environ["GITHUB_RUN_ID"],"modulus_hex":modulus,
+              "exponent":65537,"scheme":"RSA-PKCS1v1_5-ephemeral"})
+          encoded=base64.b64encode(payload.encode()).decode()
+          body=json.dumps({"message":"Ephemeral public key for encrypted market-data handoff",
+               "content":encoded,"branch":"aegis-nifty-backtest"})
+          path="aegis/_private_handoff/pubkey_"+os.environ["GITHUB_RUN_ID"]+".json"
+          url="https://api.github.com/repos/amitabhkumar/hello-world1/contents/"+path
+          req=urllib.request.Request(url,data=body.encode(),method="PUT",
+                headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                  "Accept":"application/vnd.github+json","Content-Type":"application/json"})
+          with urllib.request.urlopen(req,timeout=30) as res:
+              print("Ephemeral public key published:",path,flush=True)
+          PY
+      - name: Receive privately encrypted one-use historical option ZIP links
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json,os,subprocess,time,urllib.request,urllib.error
+          from urllib.parse import urlparse
+          endpoint="https://api.github.com/repos/amitabhkumar/hello-world1/contents/aegis/_private_handoff/aegis4-2026.enc.json?ref=aegis-nifty-backtest"
+          for attempt in range(120):
+              try:
+                  req=urllib.request.Request(endpoint,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                    "Accept":"application/vnd.github.raw+json","Cache-Control":"no-cache","User-Agent":"AEGIS20-Source-Reader"})
+                  with urllib.request.urlopen(req,timeout=25) as res:
+                      payload=json.loads(res.read().decode("utf-8"))
+                  if payload.get("blobs"):break
+              except (urllib.error.HTTPError,urllib.error.URLError,ValueError):
+                  pass
+              time.sleep(5)
+          else:raise SystemExit("AEGIS20 encrypted market-data handoff absent")
+          if payload.get("scheme")!="RSA-PKCS1v1_5-ephemeral" or payload.get("run_id")!=os.environ["GITHUB_RUN_ID"]:
+              raise SystemExit("AEGIS20 one-time RSA handoff mismatch")
+          for name,dest,low,hi in [
+             ("original","AEGIS_Upstox_Export.zip",95000000,97000000),
+             ("active","AEGIS_Upstox_Active_Patch.zip",4500000,5500000)]:
+              blocks=payload["blobs"].get(name)
+              if not isinstance(blocks,list) or not 1<=len(blocks)<=8:
+                  raise SystemExit("Invalid encrypted market archive descriptor")
+              clear=[]
+              for hextext in blocks:
+                  out=subprocess.run(["openssl","pkeyutl","-decrypt","-inkey","/tmp/aegis-private.pem",
+                    "-pkeyopt","rsa_padding_mode:pkcs1"],input=bytes.fromhex(hextext),
+                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+                  clear.append(out.stdout)
+              signed_url=b"".join(clear).decode("utf-8")
+              parts=urlparse(signed_url)
+              if parts.scheme!="https" or not parts.hostname or not parts.hostname.endswith(".oaiusercontent.com"):
+                  raise SystemExit("Unsupported market archive temporary download host")
+              req=urllib.request.Request(signed_url,headers={"User-Agent":"AEGIS20-Historical-Research/1"})
+              length=0
+              with urllib.request.urlopen(req,timeout=180) as stream,open(dest,"wb") as out:
+                  while True:
+                      chunk=stream.read(1024*1024)
+                      if not chunk:break
+                      length+=len(chunk);out.write(chunk)
+              if not low<=length<=hi:
+                  raise SystemExit("Unexpected ZIP bytes "+name+" "+str(length))
+              print("AEGIS20_ORIGINAL_SOURCE_IMPORTED",name,length,flush=True)
+          PY
+      - name: Verify no alteration of private Upstox historical source market ZIP
+        run: |
+          python - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path("AEGIS_Upstox_Export.zip")
+          digest=hashlib.sha256(root.read_bytes()).hexdigest()
+          wanted="67ae9d3345d2f9a7ab73fd7fd0a0a71894c7724c34b4e41e985372002a5e52e6"
+          assert digest==wanted,("Original historical data changed",digest)
+          print("AEGIS20_SOURCE_SHA256_PASSED",digest,flush=True)
+          PY
+          python aegis/audit_active_patch.py --patch AEGIS_Upstox_Active_Patch.zip --out AEGIS20_active_source_audit.json
+      - name: Install numerical + Parquet historical strategy dependencies
+        run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'pyarrow>=17,<24' 'duckdb>=1.2,<2'
+      - name: Retrieve previously-pinned public NIFTY 2026 option candles
+        run: python aegis/download_intraday_one.py --year 2026
+      - name: Retrieve source-verified five-minute NIFTY index and futures proxy
+        run: python aegis/download_market_context.py
+      - name: Stitch user derivative ZIPs and 2026 cash-index market signals
+        run: |
+          python aegis/stitch_upstox_2026.py --zip AEGIS_Upstox_Export.zip --support AEGIS_SUPPORT --output AEGIS_STITCH
+          python -m aegis.stitch_active_patch --zip AEGIS_Upstox_Active_Patch.zip --output AEGIS_STITCH
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42332475921
+          name: AEGIS_2026_COMPLETE_INDIA_VIX_RESEARCH_CONTEXT
+          path: VIX_COMPLETE
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Use verified ALL-YEAR India VIX 2026 before selecting any option strategy
+        run: |
+          cp VIX_COMPLETE/vix_2026.csv AEGIS_SUPPORT/vix_2026.csv
+          python - <<'PY'
+          import json,pathlib
+          r=json.loads(pathlib.Path("VIX_COMPLETE/AEGIS_VIX_2026_DATA_QUALITY.json").read_text())
+          assert r["distinct_sessions"]==209 and r["valid_minute_records"]==78375
+          assert r["token_used"] is False
+          print("AEGIS20_FULL_PRIOR_DAY_VIX_VERIFIED",r["distinct_sessions"],flush=True)
+          PY
+      - name: Execute THREE identical frozen Greek-IV-OI-VIX families on pre/post CAS 2026
+        env:
+          TZ: Asia/Kolkata
+        run: |
+          python -m aegis.aegis4_swing --year 2026 \
+            --parquet "AEGIS_INTRADAY_2026/NIFTY_2026.parquet;AEGIS_STITCH/NIFTY_upstox_2026_jul_nov.parquet;AEGIS_STITCH/NIFTY_2026_active_options_patch.parquet" \
+            --support AEGIS_SUPPORT --out AEGIS4_2026
+      - name: Verify multi-session overnight risk, IV, VIX and point-in-time OI
+        run: |
+          python - <<'PY'
+          import json,pandas as pd,pathlib
+          root=pathlib.Path("AEGIS4_2026")
+          report=json.loads((root/"AEGIS4_swing_summary_2026.json").read_text())
+          t=pd.read_csv(root/"AEGIS4_swing_trades_2026.csv")
+          assert report["year"]==2026 and report["option_session_days"]>50
+          assert report["risk_cap_rs"]==10000
+          assert report["single_entry_per_expiry"] is True
+          assert report["same_day_source_lookahead"] is False
+          if not t.empty:
+              assert (t.vix_prior_date.astype(str)<t.date.astype(str)).all()
+              assert (t.short_signal_oi>=5000).all() and (t.hedge_signal_oi>=5000).all()
+              assert (t.max_contract_risk_rs<=10000.01).all()
+              assert (t.Theta_rupees_day>0).all() and (t.Gamma_lot<0).all()
+              assert (t.Vega_rupees_ivpoint<0).all()
+              assert set(t.entry_clock)=={"10:16"}
+              assert (t.expiry.astype(str)>=t.exit_date.astype(str)).all()
+          print("AEGIS4_2026_REPLAY_QA",json.dumps({
+            "option_days":report["option_session_days"],
+            "n":report["results"]["trades"],
+            "stats":report["results"],"CAS":report["regime"],
+            "overnight":report["overnight"],
+            "skips":report["skip_reasons"],
+            "exits":report["actual_exits"]},default=str),flush=True)
+          PY
+      - name: Archive 2026 swing option Greeks VIX OI and source audits
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS4_2026_ACTUAL_SWING_OPTIONS_INDIA_VIX_GREEKS_OI
+          path: |
+            AEGIS4_2026/
+            AEGIS_STITCH/ingestion_report.json
+            AEGIS_STITCH/active_patch_ingestion.json
+            AEGIS20_active_source_audit.json
+            AEGIS_INTRADAY_2026/ingest_manifest.json
+            VIX_COMPLETE/AEGIS_VIX_2026_DATA_QUALITY.json
+          if-no-files-found: warn
+          retention-days: 90
