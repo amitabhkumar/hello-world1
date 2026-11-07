@@ -98,7 +98,10 @@ def analyze(root2024,root2025,root2026,out):
         source=root/name if (root/name).exists() else root
         t=pd.read_csv(source/f"trades_{year}.csv")
         b=pd.read_csv(source/f"baseline_{year}.csv")
-        skp=pd.read_csv(source/f"skips_{year}.csv")
+        try:
+            skp=pd.read_csv(source/f"skips_{year}.csv")
+        except pd.errors.EmptyDataError:
+            skp=pd.DataFrame(columns=["reason"])
         summ=json.loads((source/f"summary_{year}.json").read_text())
         t["date"]=t["date"].astype(str);b["date"]=b["date"].astype(str)
         if year==2024:
