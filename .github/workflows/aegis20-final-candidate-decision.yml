@@ -1,0 +1,88 @@
+name: AEGIS 2.0 full Greek OI VIX CAS strategy candidate decision
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis20-final-candidate-decision.yml'
+      - 'aegis/aegis20_compare_final.py'
+  workflow_dispatch:
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42342400999
+          name: AEGIS20_FROZEN_CANDIDATES_2024
+          path: YEAR_2024
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42342400999
+          name: AEGIS20_FROZEN_CANDIDATES_2025
+          path: YEAR_2025
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42342521984
+          name: AEGIS20_CAS_2026_IV_GREEKS_OI_VIX_CANDIDATES
+          path: YEAR_2026
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42342779596
+          name: AEGIS20_CAS_INDEX_2026_REALIZED_VIX_REGIME_COMPARISON
+          path: CAS_INDEX
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute full-window Greek/VIX/OI candidate performance and immutable CAS comparison
+        run: |
+          python -m py_compile aegis/aegis20_compare_final.py
+          python -m aegis.aegis20_compare_final \
+            --y2024 YEAR_2024 --y2025 YEAR_2025 --y2026 YEAR_2026 \
+            --cas-index CAS_INDEX/AEGIS20_CAS_VOLATILITY_EVIDENCE.json \
+            --out AEGIS20_FINAL
+      - name: Verify completed independent candidates do NOT meet deployment gates
+        run: |
+          python - <<'PY'
+          import json,pathlib,pandas as pd
+          p=pathlib.Path("AEGIS20_FINAL")
+          r=json.loads((p/"AEGIS20_FINAL_EVIDENCE.json").read_text())
+          t=pd.read_csv(p/"AEGIS20_all_frozen_candidates_2024_2026.csv")
+          assert len(t)>80
+          assert (t.max_loss_rs<=12500.01).all()
+          assert (t.min_leg_oi>=5000).all()
+          assert (t.vix_prior_date.astype(str)<t.date.astype(str)).all()
+          assert r["source_years"]["2026"]["option_quote_dates"]>50
+          assert r["post_cas_trend_sample_size"]==7
+          assert r["prospective_trade_approval_gates"]["approved_for_live_money"] is False
+          assert r["actual_nifty_index_reported_intraday_2026"]["post_CAS"]["days"]>=60
+          print("AEGIS20_EXECUTED_RESEARCH_VALIDATED",json.dumps({
+              "families":r["by_family_all_years"],
+              "post_cas":r["post_cas_family_results"],
+              "decision":r["prospective_trade_approval_gates"]},
+              default=str),flush=True)
+          PY
+      - name: Publish all source evidence, Greeks and original unaltered candidate ledgers
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS20_COMPLETE_CANDIDATE_RESEARCH_2024_2026_GREEKS_OI_VIX_CAS
+          path: |
+            AEGIS20_FINAL/
+            YEAR_2024/AEGIS20_2024/
+            YEAR_2025/AEGIS20_2025/
+            YEAR_2026/AEGIS20_2026/
+            YEAR_2026/AEGIS20_active_source_audit.json
+            YEAR_2024/AEGIS_INTRADAY_2024/ingest_manifest.json
+            YEAR_2025/AEGIS_INTRADAY_2025/ingest_manifest.json
+            YEAR_2026/AEGIS_INTRADAY_2026/ingest_manifest.json
+            YEAR_2026/VIX_COMPLETE/AEGIS_VIX_2026_DATA_QUALITY.json
+            CAS_INDEX/
+          retention-days: 90
