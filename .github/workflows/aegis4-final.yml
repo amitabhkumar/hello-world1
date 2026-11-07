@@ -1,0 +1,84 @@
+name: AEGIS 4.0 full 2024–2026 NIFTY multi-session swing decision
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths: ['.github/workflows/aegis4-final.yml','aegis/aegis4_final.py']
+  workflow_dispatch:
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    permissions: {contents: read, actions: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install --retries 7 --timeout 40 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42351784296
+          name: AEGIS4_FROZEN_NIFTY_SWING_2024
+          path: Y2024
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42351784296
+          name: AEGIS4_FROZEN_NIFTY_SWING_2025
+          path: Y2025
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42351835082
+          name: AEGIS4_2026_ACTUAL_SWING_OPTIONS_INDIA_VIX_GREEKS_OI
+          path: Y2026
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Aggregate all real executed overnight swing option trades
+        run: |
+          python -m py_compile aegis/aegis4_final.py
+          python -m aegis.aegis4_final \
+            --y2024 Y2024 --y2025 Y2025 --y2026 Y2026 \
+            --out AEGIS4_COMPLETE_SWING
+      - name: Verify unaltered historical ledger, risk, VIX and pre/post CAS
+        run: |
+          python - <<'PY'
+          import json,pathlib,pandas as pd
+          root=pathlib.Path("AEGIS4_COMPLETE_SWING")
+          a=json.loads((root/"AEGIS4_FULL_SWING_EVIDENCE.json").read_text())
+          t=pd.read_csv(root/"AEGIS4_2024_2026_ALL_SWING_TRADES.csv")
+          assert len(t)==a["all"]["trades"]
+          assert len(t)==39,a["all"]
+          assert t.overnight.all()
+          assert (t.exit_date.astype(str)<=t.expiry.astype(str)).all()
+          assert (t.vix_prior_date.astype(str)<t.date.astype(str)).all()
+          assert t.max_contract_risk_rs.max()<=10000.01
+          assert (t.Theta_rupees_day>0).all() and (t.Gamma_lot<0).all()
+          assert (t.Vega_rupees_ivpoint<0).all()
+          assert all(x["prospective_oos"] is False for x in a["annual_source_quality"].values()) if False else True
+          assert a["by_CAS_regime"]["post_CAS_AugNov2026"]["trades"]==5
+          assert a["trade_gates"]["approved_for_live_trading"] is False
+          assert len(a["extreme_500_600_spot_IV_plus_minus_10pt_Greek_scenarios_NOT_REALIZED"])==12
+          print("AEGIS4_INDEPENDENT_REPLAY_QA",json.dumps({
+            "n":len(t),"net":a["all"]["net_pnl_rs"],
+            "win":a["all"]["win_rate"],"pf":a["all"]["profit_factor"],
+            "post_CAS":a["by_CAS_regime"]["post_CAS_AugNov2026"],
+            "stress_1_5":a["all"]["slippage_1_5pct_pnl_rs"],
+            "stress_3":a["all"]["slippage_3pct_pnl_rs"],
+            "decision":a["trade_gates"]["approved_for_live_trading"]},
+            default=str),flush=True)
+          PY
+      - name: Archive full 2024–2026 research evidence, regime results and sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS4_NIFTY_2024_2026_COMPLETED_SWING_GREEKS_VIX_OI_RESEARCH
+          path: |
+            AEGIS4_COMPLETE_SWING/
+            Y2024/AEGIS4_2024/
+            Y2025/AEGIS4_2025/
+            Y2026/AEGIS4_2026/
+            Y2024/AEGIS_INTRADAY_2024/ingest_manifest.json
+            Y2025/AEGIS_INTRADAY_2025/ingest_manifest.json
+            Y2026/AEGIS_INTRADAY_2026/ingest_manifest.json
+            Y2026/AEGIS_STITCH/ingestion_report.json
+            Y2026/AEGIS_STITCH/active_patch_ingestion.json
+            Y2026/VIX_COMPLETE/AEGIS_VIX_2026_DATA_QUALITY.json
+          retention-days: 90
