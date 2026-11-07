@@ -1,0 +1,138 @@
+name: AEGIS complete rolling 2024-2026 research validation
+on:
+  push:
+    branches: [aegis-nifty-backtest]
+    paths:
+      - '.github/workflows/aegis-two-year-research.yml'
+      - 'aegis/backtest_v01.py'
+      - 'aegis/exchange_rules.py'
+      - 'aegis/rolling_research_final.py'
+  workflow_dispatch:
+jobs:
+  offline-exchange-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2'
+      - name: Verify exchange lot expiry, CAS cutover and date-effective commissions
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          from aegis import exchange_rules as x
+          from aegis import backtest_v01 as b
+          d=lambda s:dt.date.fromisoformat(s)
+          assert x.RESEARCH_START==d("2024-11-06")
+          for trade,exp,want in [
+             ("2024-11-21","2024-11-28",25),
+             ("2024-12-20","2024-12-26",25),
+             ("2024-12-24","2025-01-02",75),
+             ("2025-01-20","2025-01-30",25),
+             ("2025-01-20","2025-01-23",75),
+             ("2025-02-20","2025-02-27",75),
+             ("2025-12-30","2026-01-06",65),
+             ("2026-11-02","2026-11-09",65)
+          ]:
+             assert b.lot_size(d(trade),d(exp))==want,(trade,exp)
+          assert x.fo_session_last_minute(d("2026-07-31"))==dt.time(15,29)
+          assert x.fo_session_last_minute(d("2026-08-03"))==dt.time(15,39)
+          assert x.option_stt_sale_rate(d("2026-03-31"))==.001
+          assert x.option_stt_sale_rate(d("2026-04-01"))==.0015
+          assert x.nse_option_transaction_rate(d("2026-02-28"))==.0003503
+          assert x.nse_option_transaction_rate(d("2026-03-01"))==.0003553
+          # Cross-rate STT test: a long premium bought Mar31 and sold Apr1.
+          result=b.fees(d("2026-03-31"),65,[("CE",24000,1)],
+                        [100.],[120.],exit_date=d("2026-04-01"))
+          assert abs(result["stt"]-65*120*.0015)<1e-8,result
+          print("AEGIS_NSE_EXCHANGE_REGRESSION_PASSED",x.CIRCULARS)
+          PY
+          python -m py_compile aegis/exchange_rules.py aegis/backtest_v01.py aegis/rolling_research_final.py
+  replay-published-years:
+    needs: offline-exchange-regression
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2024,2025]
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'pyarrow>=17,<24' 'duckdb>=1.2,<2'
+      - name: Fetch checksum-pinned NSE NIFTY one-minute options Parquet
+        run: python aegis/download_intraday_one.py --year ${{ matrix.year }}
+      - name: Fetch checksum-pinned 5m NIFTY index and dated India VIX context
+        run: python aegis/download_market_context.py
+      - name: Run frozen AEGIS 1m option-candle rules with NSE date-effective transition
+        run: |
+          export TZ=Asia/Kolkata
+          python aegis/backtest_v01.py --year ${{ matrix.year }} \
+            --parquet AEGIS_INTRADAY_${{ matrix.year }}/NIFTY_${{ matrix.year }}.parquet \
+            --support AEGIS_SUPPORT --out AEGIS_BACKTEST_${{ matrix.year }}
+          python - <<'PY'
+          import json,os,pathlib
+          year=os.environ["AEGIS_TEST_YEAR"]
+          base=pathlib.Path(f"AEGIS_BACKTEST_{year}")
+          r=json.loads((base/f"summary_{year}.json").read_text())
+          assert r["year"]==int(year)
+          assert r["quote_sample_rows"]>0,r
+          print("AEGIS_NSE_YEAR_REPLAY_VALIDATED",year,json.dumps(r["aegis"]))
+          PY
+        env:
+          AEGIS_TEST_YEAR: ${{ matrix.year }}
+      - name: Upload year-specific trade, benchmark, skips, and source checksum manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS_2024_2026_REPLAY_${{ matrix.year }}
+          path: |
+            AEGIS_BACKTEST_${{ matrix.year }}/
+            AEGIS_INTRADAY_${{ matrix.year }}/ingest_manifest.json
+          retention-days: 90
+  consolidate:
+    needs: [offline-exchange-regression,replay-published-years]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install 'numpy>=1.26,<3' 'pandas>=2.1,<3' 'duckdb>=1.2,<2'
+      - uses: actions/download-artifact@v4
+        with:
+          name: AEGIS_2024_2026_REPLAY_2024
+          path: YEAR_2024
+      - uses: actions/download-artifact@v4
+        with:
+          name: AEGIS_2024_2026_REPLAY_2025
+          path: YEAR_2025
+      - name: Reuse original audited 2026 active option-candle trade ledger (no repeat 95MB transfer)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42273407619
+          name: AEGIS_2026_ACTIVE_PATCH_FULL_INTEGRATED_EVIDENCE
+          path: YEAR_2026
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reconcile 2024/25 development with repriced 2026 chronological evaluation
+        run: |
+          python -m aegis.rolling_research_final \
+            --y2024 YEAR_2024 --y2025 YEAR_2025 --y2026 YEAR_2026 \
+            --out AEGIS_TWO_YEAR_COMPLETE
+      - name: Archive audited 2024–2026 NIFTY research and audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS_NIFTY_2024_2026_COMPLETE_RESEARCH_EVIDENCE
+          path: |
+            AEGIS_TWO_YEAR_COMPLETE/
+            YEAR_2024/AEGIS_BACKTEST_2024/
+            YEAR_2025/AEGIS_BACKTEST_2025/
+            YEAR_2024/AEGIS_INTRADAY_2024/ingest_manifest.json
+            YEAR_2025/AEGIS_INTRADAY_2025/ingest_manifest.json
+          retention-days: 90
