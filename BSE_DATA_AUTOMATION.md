@@ -11,7 +11,7 @@ Configured requests, in Asia/Kolkata:
 - 22:00 daily.
 - 08:00 Saturday.
 
-GitHub can delay or miss scheduled starts. Verify actual executions. Without an explicit date, the requested date is the current IST calendar date; it is not an inferred completed trading session. Match EOD data to the verified session and check intervening disclosures separately.
+GitHub can delay or miss scheduled starts. Verify actual executions. Without an explicit date, trading-file datasets use the verified BSE calendar: before 19:00 IST the previous eligible session, at/after 19:00 the latest eligible session. Disclosure feeds retain the current calendar date. The manifest records both dates and calendar hashes. Missing calendar coverage fails explicitly; no older-file substitution is made for a missing required file.
 
 For an authorized, reproducible push acceptance run, commit-message markers `[bse-data-date=YYYY-MM-DD]` and optional `[bse-data-sets=bulk_block,price_bands]` select the test date/sources. Explicit CLI/workflow inputs take precedence. Scheduled runs do not inherit old commit-message test selections.
 
@@ -53,7 +53,7 @@ All **21 automated tests** passed in the final code acceptance run. Independent 
 
 The collector intentionally exits nonzero while any requested category remains partial or unavailable. Artifacts are uploaded even after partial collection. A red workflow does not mean every download failed; it must not be relabelled green to hide coverage gaps.
 
-## Remaining requirements
+## Historical remaining requirements at the October acceptance
 
 1. **Bulk/block:** latest exact-date endpoints returned `{}` without the expected Table schema, despite an earlier 62-row bulk response. UI and explicit API requests were tested. Treat both deal types independently; obtain a valid dated official report or schema-bearing response before claiming reliable retrieval. Never treat malformed empty responses as zero deals.
 2. **Shareholding:** the later retry downloaded 23,626 filing-index records. This is a relative last-year window at retrieval time, not a historical as-of database. Parse original issuer XBRL/filings for ownership conclusions; quarters and revisions may differ.
@@ -65,3 +65,22 @@ The collector intentionally exits nonzero while any requested category remains p
 ## Continuity
 
 Preserve each artifact before expiry, verify exact file hashes/dates/row counts on readback, and append project-storage receipts. Reload the authoritative SOP and latest research ledger for every research run. Keep frozen forecasts, failed responses, and corrections separately. Missing data must remain missing; successful acquisition alone does not justify a high-conviction classification.
+
+
+## 15 November 2026 repair
+
+Commit c00cfb2b942a8d105a9bcb6d33f6520f422bd1d3, live run 43697474620, independently validated export hashes/bytes/counts and all delivery rows: 5,141 delivery rows, 51 bulk rows, schema-bearing empty block response, 1 breadth row, ASM 68/226, GSM 625, regulatory 20,910/7,960/5,870. Prior failures are retained. An empty BannedSecurities member no longer prevents parsing other reference members; it is preserved as EMPTY_SCHEMA_VALID and does not establish unrestricted trading.
+
+The detail collector adds the entire active Equity T+1 master population for price-band snapshots and the latest original HTML ownership filing per issuer in the one-year index. Original response bytes and normalized ownership tables are retained. Eight in-flight requests maximum, no download retry loop, and access-denial/rate-limit responses stop further batches. Progress files retain counts and errors. The job budget is 60 minutes to accommodate declared coverage; existing cron times are unchanged. A timeout or incomplete population remains partial, never complete.
+
+Price-band source dates, execution dates and target session remain distinct. Future-dated snapshots are not approved current-session risk filters. Shareholding submission time, index EndDate and stated quarter are retained separately. Parsed original tables do not themselves establish quarter-on-quarter ownership changes. Regulatory code/effective-session interpretation and actual pre-open validation remain separate research requirements.
+
+### Completed detail acceptance and automatic reuse
+
+Run 43733694031 (commit c9357111f2c5241fb693edd742142d54efe23a36) completed both requested categories: 5,147/5,147 active-equity band snapshots and 5,124/5,124 latest original ownership tables, zero detail errors. Independent validation checked all original/normalized hashes, row counts, issuer bindings, positive finite band limits and source dates. All band PBdate values were 14 November; this is a source date, not established effective-session permission for the 13 November target. 4,213 ownership originals were reused exactly and 911 fetched. Earlier run43697889839 hit60 minutes; its progress count4223 exceeded the actual4215 preserved originals. Only actual files receive credit.
+
+Production now stops detail collection gracefully at45 minutes, before the60-minute runner limit, preserving receipts and exact remaining items. The immutable-original cache is restored automatically on scheduled runs. A cached filing is reused only when the current original URL and saved SHA256 match; changed originals are fetched once. Cached original retrieval times are preserved when known and remain null when unknown; validation time is separate. Cache failure or eviction must not be reported as successful reuse. The original raw documents remain in artifacts and authorized project storage.
+
+Run43735297296 completed cache seeding. A separate no-explicit-resume acceptance is recorded in the project receipt; do not infer actual future scheduled delivery or punctuality from these push tests. All exchange cron schedules remain unchanged. Source acquisition success does not complete a TITAN research scan or establish security-specific trading permission.
+
+Automatic-cache acceptance run43736045886 completed successfully with78 repository tests passing. It restored bse-originals-43735297296-1 without an explicit resume run ID and validated all5124 ownership filings withzero detail errors. The independently checked acceptance receipt records exact reuse and canonical saved files. These were push acceptances, not proof of punctual scheduled execution.
