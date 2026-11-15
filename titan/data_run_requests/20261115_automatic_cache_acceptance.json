@@ -1,0 +1,8 @@
+{
+  "purpose": "Verify unattended immutable-original cache restore without explicit resume run ID",
+  "datasets": [
+    "shareholding"
+  ],
+  "expected": "Reuse only exact URL and SHA256 matches; changed filings fetched once; no retry loop",
+  "date": "2026-11-15"
+}
