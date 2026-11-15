@@ -25,7 +25,7 @@ class AccessEvidence(unittest.TestCase):
     def test_missing_schema(self):
         with self.assertRaisesRegex(ValueError,'COLUMNS'): decode_master(gzip.compress(b'a,b\n1,2\n'))
     def test_known_official_hosts(self):
-        for url in ['https://nsearchives.nseindia.com/a','https://www.nseindia.in/a']:
+        for url in ['https://nsearchives.nseindia.com/a','https://www.nseindia.in/a','https://nsearchives.nseindia.in/content/cm/REG1_IND131126.csv']:
             self.assertTrue(official_url(url))
     def test_host_spoofs_rejected(self):
         for url in ['http://www.nseindia.com/a','https://nseindia.com.evil.test/a',

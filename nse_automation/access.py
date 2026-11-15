@@ -15,7 +15,7 @@ MASTER_SOURCE = 'https://nsearchives.nseindia.com/content/circulars/CMTR73927.zi
 CAS_SOURCE = 'https://nsearchives.nseindia.com/content/circulars/CMTR74466.zip'
 PREOPEN_SOURCE = 'https://nsearchives.nseindia.com/content/circulars/CMTR74969.zip'
 HOSTS = {'nseindia.com', 'www.nseindia.com', 'nsearchives.nseindia.com',
-         'archives.nseindia.com', 'nseindia.in', 'www.nseindia.in'}
+         'archives.nseindia.com', 'nseindia.in', 'www.nseindia.in', 'nsearchives.nseindia.in'}
 
 def official_url(url):
     p = urlparse(url)
