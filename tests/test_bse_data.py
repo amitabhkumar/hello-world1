@@ -97,3 +97,33 @@ class DetailTests(unittest.TestCase):
   from titan.bse_details import Tables
   p=Tables();p.feed('<table><tr><th>Shareholding</th><th>Percent</th></tr><tr><td>Promoter</td><td>0</td></tr></table>')
   self.assertEqual(p.tables[0][1],['Promoter','0'])
+
+class ContinuationTests(unittest.TestCase):
+ def test_budget_checkpoint_without_request(self):
+  import os,time,tempfile,json
+  from pathlib import Path
+  from unittest.mock import patch
+  from titan.bse_details import fetch_details
+  class NoNetwork:
+   def evaluate(self,*args):raise AssertionError('Unexpected request')
+  with tempfile.TemporaryDirectory() as d, patch.dict(os.environ,{'BSE_RUN_DEADLINE_MONOTONIC':str(time.monotonic()-1)}):
+   rows,errors=fetch_details(NoNetwork(),[{'scrip_code':'500001','url':'https://api.bseindia.com/test'}],Path(d),'bands','2026-11-13')
+   self.assertEqual(rows,[]);self.assertEqual(errors[0]['error'],'COLLECTION_BUDGET_EXHAUSTED')
+   self.assertEqual(len(json.loads((Path(d)/'bands_progress.json').read_text())['remaining']),1)
+ def test_original_cache_no_refetch(self):
+  import os,tempfile,json
+  from pathlib import Path
+  from unittest.mock import patch
+  from titan.bse_details import fetch_details,latest_filings
+  class NoNetwork:
+   def evaluate(self,*args):raise AssertionError('Unexpected request')
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);old=p/'shareholding';old.mkdir();out=p/'out';out.mkdir()
+   index=[{'FLD_ScripCode':500001,'XBRLAttachment':'/XBRLFILES/500001_a.html','sQtrName':'September 2026','D':'2026-11-01'}]
+   (old/'shareholding_one_year.json').write_text(json.dumps({'Table':index}))
+   original=b'<table><tr><td>Shareholding</td><td>0</td></tr></table>'
+   (old/'ownership_500001.html').write_bytes(original)
+   with patch.dict(os.environ,{'BSE_RESUME_DIRECTORY':str(p),'BSE_RESUME_RUN_ID':'123','BSE_RUN_DEADLINE_MONOTONIC':''}):
+    rows,errors=fetch_details(NoNetwork(),latest_filings(index),out,'ownership','2026-11-15')
+   self.assertFalse(errors);self.assertEqual((out/'ownership_500001.html').read_bytes(),original)
+   self.assertIsNone(rows[0]['retrieved_at']);self.assertEqual(rows[0]['reused_from_run'],'123')

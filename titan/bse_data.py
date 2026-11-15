@@ -504,6 +504,8 @@ def main():
  names=list(SOURCES) if dataset_selection=='all' else dataset_selection.split(',')
  if not set(names)<=set(SOURCES):p.error('Unknown dataset')
  names=[n for n in names if n not in ['price_bands','shareholding']]+[n for n in ['price_bands','shareholding'] if n in names]
+ import time
+ os.environ['BSE_RUN_DEADLINE_MONOTONIC']=str(time.monotonic()+2700)
  started=now();results=[]
  from playwright.sync_api import sync_playwright
  with sync_playwright() as pw:

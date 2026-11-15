@@ -1,5 +1,5 @@
 """Bounded parallel public BSE detail acquisition. No download retries."""
-import json, re, base64, os
+import json, re, base64, os, time
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import urljoin
@@ -42,6 +42,12 @@ def fetch_details(page,items,dest,kind,target):
    if f.exists():cache[entry['url']]=f
  # Eight in-flight requests maximum; no retries or evasion. Preserve each response.
  for offset in range(0,len(items),8):
+  deadline=os.getenv('BSE_RUN_DEADLINE_MONOTONIC')
+  if deadline and time.monotonic()+35>=float(deadline):
+   errors.append({'error':'COLLECTION_BUDGET_EXHAUSTED','remaining':len(items)-offset,'next_action':'Resume saved artifact; no unsaved work credited'})
+   (dest/(kind+'_receipts.json')).write_text(json.dumps(rows,ensure_ascii=False))
+   (dest/(kind+'_progress.json')).write_text(json.dumps({'attempted':offset,'population':len(items),'validated':len(rows),'errors':errors,'remaining':items[offset:]},indent=2))
+   break
   batch=items[offset:offset+8]
   if any(not official(x['url']) for x in batch):raise ValueError('Non-official detail source')
   network=[x for x in batch if x['url'] not in cache]
