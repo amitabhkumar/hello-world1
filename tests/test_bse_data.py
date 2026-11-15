@@ -62,3 +62,24 @@ class DataQualityTests(unittest.TestCase):
   from titan.bse_data import decode_reference
   text,enc=decode_reference(b'Company\xa0Name')
   self.assertIn('cp1252',enc);self.assertIn('Name',text)
+
+
+class SessionDateTests(unittest.TestCase):
+ def plan(self,stamp,explicit=None):
+  from datetime import datetime
+  from titan.bse_data import dataset_dates
+  return dataset_dates(datetime.fromisoformat(stamp),explicit)
+ def test_sunday_keeps_news_separate(self):
+  p=self.plan('2026-11-15T10:00:00+05:30');self.assertEqual(p['eod_date'],'2026-11-13');self.assertEqual(p['event_date'],'2026-11-15')
+ def test_publication_boundary(self):
+  self.assertEqual(self.plan('2026-11-13T18:59:00+05:30')['eod_date'],'2026-11-12')
+  self.assertEqual(self.plan('2026-11-13T19:00:00+05:30')['eod_date'],'2026-11-13')
+ def test_holiday_and_special(self):
+  self.assertEqual(self.plan('2026-11-10T22:00:00+05:30')['eod_date'],'2026-11-09')
+  self.assertEqual(self.plan('2026-11-09T08:30:00+05:30')['eod_date'],'2026-11-08')
+ def test_month_rollover(self):
+  self.assertEqual(self.plan('2026-11-02T08:30:00+05:30')['eod_date'],'2026-10-30')
+ def test_uncovered_year_fails(self):
+  with self.assertRaises(RuntimeError):self.plan('2027-01-01T08:30:00+05:30')
+ def test_explicit_closed_date_rejected(self):
+  with self.assertRaises(ValueError):self.plan('2026-11-15T22:00:00+05:30','2026-11-15')

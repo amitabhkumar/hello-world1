@@ -360,7 +360,11 @@ def adapt(context,page,key,target,dest,responses,result):
     for member in result['archive_members']:
      if re.search(r'(REG1?_IND|BSE_EQ_SCRIP|BannedSecurities)',member['member']):
       text,enc=decode_reference((dest/member['file']).read_bytes())
-      rows=list(csv.DictReader(io.StringIO(text)));keys=['FinInstrmId','ISIN'] if 'BSE_EQ_SCRIP' in member['member'] else ['ScripCode','ESM'] if 'REG' in member['member'] else ['Date','ISIN']
+      reader=csv.DictReader(io.StringIO(text));rows=list(reader);keys=['FinInstrmId','ISIN'] if 'BSE_EQ_SCRIP' in member['member'] else ['ScripCode','ESM'] if 'REG' in member['member'] else ['Date','ISIN']
+      if not rows:
+       if not set(keys)<=set(reader.fieldnames or []):raise ValueError('Empty reference has invalid header')
+       result.setdefault('empty_members',[]).append({'member':member['member'],'status':'EMPTY_SCHEMA_VALID','rows':0,'meaning':'Empty member retained; does not prove absence of restrictions'})
+       continue
       result['exports'].append(export_rows(dest,Path(member['file']).stem+'_records',rows,keys,files[0]['source_url'],'Raw dated reference records. Numeric flag codes are not decoded into risk classifications. Mixed security types/statuses retained.'))
     result['status']='VALIDATED_SNAPSHOT' if result['exports'] else 'PARTIAL'
     result['coverage']='Downloaded and extracted SCRIP reference archive; per-member dates retained. Raw REG_IND/REG1_IND/UDiFF flags are not an approved restriction interpretation.'
@@ -445,6 +449,33 @@ def collect_one(context,key,target,out):
   (dest/'manifest.json').write_text(json.dumps(result,indent=2));page.close()
  return result
 
+# Trading files and calendar-day disclosure feeds have different clocks.
+EOD_DATASETS={'delivery','bulk_block','breadth','asm','gsm','regulatory_files','price_bands'}
+def dataset_dates(clock, explicit=None, calendar_dir=None):
+ from titan.bse import targets, Unavailable
+ if clock.tzinfo is None:raise ValueError('Aware clock required')
+ clock=clock.astimezone(IST)
+ calendar_dir=calendar_dir or Path(__file__).parent/'calendars'
+ holidays=set();special=set();years=set();evidence=[]
+ for f in sorted(calendar_dir.glob('*.json')):
+  c=json.loads(f.read_text())
+  if not official(c['source']):raise ValueError('Non-official calendar provenance')
+  year=int(c['year']);days={date.fromisoformat(x) for x in c['holidays']}
+  if not days or any(d.year!=year for d in days):raise ValueError('Invalid calendar coverage')
+  years.add(year);holidays.update(days);special.update(date.fromisoformat(x) for x in c.get('special_sessions',[]))
+  evidence.append(dict(file=f.name,source=c['source'],sha256=fingerprint(f.read_bytes())['sha256']))
+ if clock.year not in years:raise Unavailable('Calendar unavailable for '+str(clock.year))
+ event_day=date.fromisoformat(explicit) if explicit else clock.date()
+ if event_day>clock.date():raise ValueError('Future report date')
+ if explicit:
+  if event_day.year not in years:raise Unavailable('Calendar unavailable for '+str(event_day.year))
+  if event_day not in special and (event_day.weekday()>=5 or event_day in holidays):
+   raise ValueError('Explicit report date is not an eligible BSE session')
+  eod=event_day
+ else:eod=targets(clock,holidays=holidays,calendar_years=years,special_sessions=special)[0]
+ return {'event_date':event_day.isoformat(),'eod_date':eod.isoformat(),'calendar_evidence':evidence,
+         'policy':'Before 19:00 previous eligible session; after 19:00 latest eligible session; disclosure feeds retain calendar date'}
+
 def main():
  p=argparse.ArgumentParser();p.add_argument('--date');p.add_argument('--datasets',default='all');p.add_argument('--output',type=Path,default=Path('bse_data_output'));args=p.parse_args()
  explicit=args.date
@@ -452,7 +483,7 @@ def main():
   event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
   match=re.search(r'\[bse-data-date=(\d{4}-\d{2}-\d{2})\]',(event.get('head_commit') or {}).get('message',''))
   if match:explicit=match.group(1)
- target=explicit or datetime.now(IST).date().isoformat();date.fromisoformat(target)
+ clock=datetime.now(IST);date_plan=dataset_dates(clock,explicit);target=date_plan['event_date']
  if date.fromisoformat(target)>datetime.now(IST).date():p.error('Future report date')
  args.output.mkdir(parents=True,exist_ok=True)
  if any(args.output.iterdir()):p.error('Output must be empty; never reuse stale outputs')
@@ -476,12 +507,14 @@ def main():
    else:
     home.close()
     for n in names:
-     x=collect_one(context,n,target,args.output);results.append(x);print('DATASET_RESULT '+json.dumps({k:v for k,v in x.items() if k not in ['responses','observed_data_responses','calendar_tables','diagnostic_links']},ensure_ascii=False),flush=True)
+     dataset_target=date_plan['eod_date'] if n in EOD_DATASETS else target
+     x=collect_one(context,n,dataset_target,args.output);x['execution_calendar_date']=clock.date().isoformat();x['date_policy']=date_plan['policy'];results.append(x);print('DATASET_RESULT '+json.dumps({k:v for k,v in x.items() if k not in ['responses','observed_data_responses','calendar_tables','diagnostic_links']},ensure_ascii=False),flush=True)
   except Exception as e:
    seen={x['dataset'] for x in results};results += [{'dataset':n,'status':'FAILED','error':str(e)} for n in names if n not in seen]
   finally:browser.close()
  status='COMPLETE' if results and all(x['status'] in ['VALIDATED_DATED_RECORDS','VALIDATED_SNAPSHOT','VALIDATED_DOWNLOAD','NOT_APPLICABLE'] for x in results) else 'PARTIAL'
- manifest={'schema_version':1,'started_at':started,'finished_at':now(),'requested_report_date':target,'mode':'Public BSE source acquisition; page captures are explicitly unvalidated','status':status,'github_run_id':os.getenv('GITHUB_RUN_ID'),'github_run_attempt':os.getenv('GITHUB_RUN_ATTEMPT'),'commit':os.getenv('GITHUB_SHA'),'datasets':results,'drive_status':'NOT_TRANSFERRED'}
+ manifest={'schema_version':2,'date_plan':date_plan,'started_at':started,'finished_at':now(),'requested_report_date':target,'mode':'Public BSE source acquisition; page captures are explicitly unvalidated','status':status,'github_run_id':os.getenv('GITHUB_RUN_ID'),'github_run_attempt':os.getenv('GITHUB_RUN_ATTEMPT'),'commit':os.getenv('GITHUB_SHA'),'datasets':results,'drive_status':'NOT_TRANSFERRED'}
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
  return 0 if status=='COMPLETE' else 2
 if __name__=='__main__':sys.exit(main())
+
