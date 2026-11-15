@@ -48,3 +48,18 @@ The previous function omitted GSM I/II and ESM I and unconditionally returned Un
 A separate gsm_esm_session_result distinguishes a known block, auction requirement, matched weekly date and absence of a GSM/ESM session prohibition. This is not global trading clearance or an intraday order-window decision. Other frameworks, complete bands and subsequent notices remain separate checks. No current observed stage is unmapped in the5November REG1 snapshot effective6November.
 
 Live run42180201515, artifact13484638222, passed. Independent validation:3227records;16Blocked,19PeriodicCallAuctionRequired,3192NoGSMESMSessionProhibition; six CSVs unchanged from verified earlier hashes. New17regression tests and existing5effective tests pass; hosted test discovery job127767801662 also passed. Sources: NSE GSM FAQ12June2026 and SURV69315 (25July2025, actions retained in consolidatedSURV74008). Prior partial outputs remain valid historical records and are not overwritten.
+
+## Security-master evidence repair — 15 November 2026
+The NSE-listed MII security master (NSE_CM_security_ddmmyyyy.csv.gz) is now collected once for the exact selected report date. This is distinct from the NSE/BSE interop variant. GZIP integrity, decompression limits, schema, nonempty rows, token/ISIN identifiers and unique symbol-series keys are checked. Both compressed and decompressed SHA256/bytes are recorded.
+
+Security status, normal-market eligibility, daily rupee range, call-auction indicator and closing-auction eligibility are decoded from CMTR73927 Part D Annexures 1/10, CMTR74466 Annexure A and CMTR74969 (effective September 7). These are master-snapshot values, not an intraday permission or a fill. The international ETF caution field is decoded from SURV76993; unknown future values stay Unknown.
+
+security_access_evidence.json joins REG1, the master and band rows by symbol AND series. A confirmed effective-date band change proves that row only; it never dates the entire complete list. Conflicting bands, absent records, unsupported codes, master applicability and subsequent-notice gaps remain explicit. Master local update time is not publication time. No future file is relabelled current. No historical forecast is changed.
+
+Observed scheduled run43639735482 rejected all six report downloads at source-host validation. The prior error omitted its actual URL. The collector now records download and page URLs before validation and accepts only enumerated HTTPS NSE hosts, including the official website's observed nseindia.in redirect. Blob URLs remain unapproved; an official-looking blob origin alone is not proof of upstream bytes. This must be verified in the new live artifact, not assumed from unit tests.
+
+The workflow runs all test_nse_*.py tests before acquisition. Schedules, publication gate, no-retry policy and BSE workflows are unchanged. COMPLETE price-band applicability and comprehensive target-session clearance are NOT claimed by this repair: use the per-security pending checks. Reference sources:
+- https://nsearchives.nseindia.com/content/circulars/CMTR73927.zip
+- https://nsearchives.nseindia.com/content/circulars/CMTR74466.zip
+- https://nsearchives.nseindia.com/content/circulars/CMTR74969.zip
+- https://nsearchives.nseindia.com/content/circulars/SURV76993.zip

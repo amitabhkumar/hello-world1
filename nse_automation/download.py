@@ -1,5 +1,9 @@
 """NSE All Reports: REG1 and price-band acquisition, one attempt per file."""
 import argparse, csv, hashlib, io, json, os, re, sys
+if __package__:
+    from .access import official_url, decode_master, reconcile
+else:
+    from access import official_url, decode_master, reconcile
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -43,6 +47,9 @@ REG1_MAPS = {
  "Long_Term_Additional_Surveillance_Measure (Long Term ASM)": {"100":"Not under LTASM", **{str(n):"LTASM stage " + str(n) for n in (1,2,3,4)}},
  "Short_Term_Additional_Surveillance_Measure (Short Term ASM)": {"100":"Not under STASM", "1":"STASM stage 1", "2":"STASM stage 2"},
  "ESM": {"100":"Not applicable", "1":"ESM stage 1", "2":"ESM stage 2"}}
+
+REG1_MAPS["Cautionary Alert Message for International ETF"] = {
+    "100": "Not under this category", "1": "International ETF may trade away from NAV"}
 
 REG1_EFFECTIVE_SOURCE = "https://nsearchives.nseindia.com/content/circulars/SURV67801.pdf#page=81"
 REG1_MAPS.update({'Nse Exclusive': {'Y': 'NSE exclusive', 'N': 'Not NSE exclusive'}, 'Unsolicited_SMS': {'100': 'Not under SMS', '0': 'Information list', '1': 'Current watchlist'}, 'Insolvency_Resolution_Process(IRP)': {'100': 'Not under IRP', '0': 'Corporate disclosure received', '1': 'IBC stage I', '2': 'IBC stage II'}, 'Default': {'100': 'Not under default disclosure', '0': 'Default disclosure', '1': 'Default surveillance measure'}, 'ICA': {'100': 'Not under ICA', '0': 'ICA identified', '1': 'ICA surveillance measure'}, 'Social Media Platforms': {'100': 'Not identified', '2': 'Surveillance measure list'}, 'Pledge': {'100': 'Not identified', '1': 'Identified'}, 'Add-on_PB': {'100': 'Not identified', '1': 'Identified'}, 'Total Pledge': {'100': 'Not identified', '1': 'Identified'}, 'Loss making': {'100': 'Not under category', '0': 'Under category'}, 'The Overall encumbered share in the scrip is more than 50 Percent.': {'100': 'Not under category', '0': 'Under category'}, 'Under BZ/SZ Series': {'100': 'Not under category', '0': 'Under category'}, 'Company has failed to pay Annual listing fee': {'100': 'Not under category', '0': 'Under category'}, 'Derivative contracts in the scrip to be moved out of F and O': {'100': 'Not under category', '0': 'Under category'}, 'Scrip PE is greater than 50 (4 trailing quarters)': {'100': 'Not under category', '0': 'Under category'}, 'EPS in the scrip is zero (4 trailing quarters)': {'100': 'Not under category', '0': 'Under category'}, 'Less than 100 unique PAN traded in previous 30 days': {'100': 'Not under category', '0': 'Under category'}, 'Mandatory Market making period in SME scrip is over': {'100': 'Not under category', '0': 'Under category'}, 'SME scrip is not regularly traded': {'100': 'Not under category', '0': 'Under category'}, 'Close to Close price movement greater than 25perc in previous 5 trading days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 40perc in previous 15 trading days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 100perc in previous 60 trading Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 25perc in previous 15 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 50perc in previous 1 month': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 90perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 25perc in previous 1 month': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 50perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 200perc in previous 365 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 75perc in previous 6 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'Close to Close price movement greater than 100perc in previous 365 days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 75perc in previous 1 month': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 150perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 75perc in previous 3 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 300perc in previous 365 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 100perc in previous 6 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 200perc in previous 365 Days': {'100': 'Not flagged among selected criteria', '0': 'Under category'}, 'High low price variation greater than 150perc in previous 12 months': {'100': 'Not flagged among selected criteria', '0': 'Under category'}})
@@ -266,9 +273,10 @@ def main():
                             card.get_by_label("Download File",exact=True).click()
                         download=event.value
                         source=download.url
-                        host=urlparse(source).hostname or ""
-                        if urlparse(source).scheme!="https" or not (host=="nseindia.com" or host.endswith(".nseindia.com")):
-                            raise ValueError("Download source not official NSE HTTPS")
+                        item["observed_download_url"] = source
+                        item["observed_page_url"] = page.url
+                        if not official_url(source):
+                            raise ValueError("Download source not verified official NSE HTTPS: " + source)
                         if download.suggested_filename!=name: raise ValueError("Downloaded filename differs from selected report")
                         if download.failure(): raise RuntimeError(download.failure())
                         tmp=out/(name+".part")
@@ -290,6 +298,43 @@ def main():
                     except Exception as e:
                         item.update(status="FAILED",error=type(e).__name__+": "+str(e))
                         (out/(name+".part")).unlink(missing_ok=True)
+                master_name = "NSE_CM_security_" + target.strftime("%d%m%Y") + ".csv.gz"
+                master_url = "https://nsearchives.nseindia.com/content/cm/" + master_name
+                master_item = dict(filename=master_name,file_date=target.isoformat(),
+                    effective_date="UNVERIFIED", status="STARTED", source_url=master_url,
+                    scope="NSE-listed security master; not the interop/BSE-exclusive variant")
+                m["datasets"].append(master_item)
+                try:
+                    # Single exact-date official request; no prior-date fallback or retry loop.
+                    response = context.request.get(master_url, timeout=45000)
+                    master_item.update(http_status=response.status,final_url=response.url)
+                    if not response.ok or not official_url(response.url):
+                        raise ValueError("Master HTTP/source validation failed: " + str(response.status))
+                    payload = response.body()
+                    master_rows, raw_master = decode_master(payload)
+                    (out/master_name).write_bytes(payload)
+                    master_item.update(status="VALIDATED_DOWNLOAD",rows=len(master_rows),
+                        bytes=len(payload),sha256=hashlib.sha256(payload).hexdigest(),
+                        csv_bytes=len(raw_master),csv_sha256=hashlib.sha256(raw_master).hexdigest(),
+                        retrieved_at=datetime.now(IST).isoformat())
+                    if (out/"reg1_interpreted.json").exists():
+                        reg_records = json.loads((out/"reg1_interpreted.json").read_text())["records"]
+                        bands, evidence = [], []
+                        # Separate target-context SME and current CM file; conflicting rows stay unknown.
+                        target_effective = next_session(target)
+                        for file in out.glob("*.csv"):
+                            if file.name.startswith("sec_list_") or (file.name.startswith("sme_bands_complete_") and filedate(file.name)==target_effective):
+                                bands.extend(csv.DictReader(io.StringIO(file.read_text(encoding="utf-8-sig"))))
+                        for file in out.glob("*.effective.json"):
+                            evidence.append(json.loads(file.read_text()))
+                        records = reconcile(reg_records,master_rows,bands,evidence,target_effective.isoformat())
+                        (out/"security_access_evidence.json").write_text(json.dumps(dict(
+                            report_date=target.isoformat(),target_date=target_effective.isoformat(),
+                            master=master_item,records=records,
+                            scope="Snapshot interpretation; missing applicability/notices remain explicit"),indent=2))
+                        m["security_access_status"]="EVIDENCE_JOINED_WITH_EXPLICIT_PENDING_CHECKS"
+                except Exception as e:
+                    master_item.update(status="FAILED",error=type(e).__name__+": "+str(e))
                 page.screenshot(path=str(out/"all_reports.png"),full_page=True)
                 good={x["filename"] for x in m["datasets"] if x["status"]=="VALIDATED_DOWNLOAD"}
                 m["status"]="ALL_SELECTED_DOWNLOADS_VALIDATED" if set(required)<=good and all(x["status"]=="VALIDATED_DOWNLOAD" for x in m["datasets"]) else "PARTIAL_OR_BLOCKED"
@@ -303,6 +348,7 @@ def main():
         print(json.dumps(m,indent=2))
     return exitcode
 if __name__=="__main__": sys.exit(main())
+
 
 
 

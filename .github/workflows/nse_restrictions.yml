@@ -38,7 +38,7 @@ jobs:
           /tmp/nse-venv/bin/python -m pip install playwright==1.56.0
           echo '/tmp/nse-venv/bin' >> "$GITHUB_PATH"
       - name: Validate calendar and interpretation before acquisition
-        run: PYTHONPATH=. python tests/test_nse_session_selection.py
+        run: PYTHONPATH=. python -m unittest discover -s tests -p 'test_nse_*.py'
       - name: Download exact dated reports once
         env:
           REPORT_DATE: ${{ inputs.report_date }}
