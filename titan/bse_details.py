@@ -1,5 +1,6 @@
 """Bounded parallel public BSE detail acquisition. No download retries."""
-import json, re, base64
+import json, re, base64, os
+from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
@@ -31,19 +32,29 @@ class Tables(HTMLParser):
 def fetch_details(page,items,dest,kind,target):
  from titan.bse_data import official,write_blob,now,parse_source_date
  from decimal import Decimal
- rows=[];errors=[];blocked=False
+ rows=[];errors=[];blocked=False;cache={}
+ resume=os.getenv('BSE_RESUME_DIRECTORY')
+ if resume and kind=='ownership':
+  root=Path(resume)/'shareholding'
+  old=json.loads((root/'shareholding_one_year.json').read_text())['Table']
+  for entry in latest_filings(old):
+   f=root/('ownership_'+entry['scrip_code']+'.html')
+   if f.exists():cache[entry['url']]=f
  # Eight in-flight requests maximum; no retries or evasion. Preserve each response.
  for offset in range(0,len(items),8):
   batch=items[offset:offset+8]
   if any(not official(x['url']) for x in batch):raise ValueError('Non-official detail source')
-  replies=page.evaluate('''async items => await Promise.all(items.map(async x => {
+  network=[x for x in batch if x['url'] not in cache]
+  network_replies=page.evaluate('''async items => await Promise.all(items.map(async x => {
    try {const r=await fetch(x.url,{signal:AbortSignal.timeout(30000)});
     const a=new Uint8Array(await r.arrayBuffer());let b='';for(let i=0;i<a.length;i+=8192)b+=String.fromCharCode(...a.subarray(i,i+8192));
     return {status:r.status,url:r.url,b64:btoa(b)};}
    catch(e){return {error:String(e)};}
-  }))''',batch)
+  }))''',network) if network else []
+  it=iter(network_replies)
+  replies=[{'status':200,'url':x['url'],'b64':base64.b64encode(cache[x['url']].read_bytes()).decode(),'cached':True} if x['url'] in cache else next(it) for x in batch]
   for item,reply in zip(batch,replies):
-   entry={**item,'retrieved_at':now(),'requested_report_date':target}
+   entry={**item,'retrieved_at':None if reply.get('cached') else now(),'validated_at':now(),'requested_report_date':target,'reused_from_run':os.getenv('BSE_RESUME_RUN_ID') if reply.get('cached') else None,'retrieval_note':'Original per-file retrieval time unavailable in interrupted run; source artifact preserved' if reply.get('cached') else 'Live response'}
    try:
     if reply.get('status') in (401,403,429):blocked=True
     if reply.get('status')!=200:raise ValueError('HTTP '+str(reply.get('status'))+' '+reply.get('error',''))
@@ -67,6 +78,7 @@ def fetch_details(page,items,dest,kind,target):
      entry.update(tables=len(parser.tables),table_file=tablefile,period_basis='Original index quarter; body tables retained without period substitution',interpretation='Original tables parsed; ownership changes require comparable prior-period filing')
     rows.append(entry)
    except Exception as e:errors.append({**entry,'error':str(e)})
+  (dest/(kind+'_receipts.json')).write_text(json.dumps(rows,ensure_ascii=False))
   (dest/(kind+'_progress.json')).write_text(json.dumps({'attempted':min(offset+8,len(items)),'population':len(items),'validated':len(rows),'errors':errors,'remaining':items[offset+8:] if blocked else []},indent=2))
   print('DETAIL_PROGRESS',kind,min(offset+8,len(items)),len(items),len(rows),len(errors),flush=True)
   if blocked:break

@@ -8,6 +8,10 @@ on:
         description: 'Requested report date YYYY-MM-DD; snapshots retain their actual source date'
         type: string
         required: false
+      resume_run_id:
+        description: 'Completed BSE supplementary run whose exact original ownership files may be reused'
+        type: string
+        required: false
       datasets:
         description: 'all or comma-separated dataset IDs from titan/bse_data.py'
         type: string
@@ -19,6 +23,7 @@ on:
     - cron: '30 2 * * 6'
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: bse-supplementary-${{ github.ref }}
   cancel-in-progress: false
@@ -34,6 +39,30 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: pip install -r requirements-bse.txt
       - run: python -m playwright install --with-deps chromium
+      - name: Resolve optional saved-artifact continuation
+        env:
+          REQUESTED_RESUME_RUN: ${{ inputs.resume_run_id }}
+        run: |
+          python - <<'PYCODE'
+          import os,json,re
+          value=os.getenv('REQUESTED_RESUME_RUN','')
+          if not value and os.getenv('GITHUB_EVENT_NAME')=='push':
+              event=json.load(open(os.environ['GITHUB_EVENT_PATH']))
+              match=re.search(r'\[bse-data-resume=(\d+)\]',(event.get('head_commit') or {}).get('message',''))
+              if match:value=match.group(1)
+          if value and not value.isdigit():raise ValueError('Invalid resume run ID')
+          if value:
+              with open(os.environ['GITHUB_ENV'],'a') as out:
+                  out.write('BSE_RESUME_RUN_ID='+value+'\nBSE_RESUME_DIRECTORY=bse_resume\n')
+          PYCODE
+      - name: Restore completed artifact for immutable-original reuse
+        if: env.BSE_RESUME_RUN_ID != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: bse-data-${{ env.BSE_RESUME_RUN_ID }}-1
+          path: bse_resume
+          run-id: ${{ env.BSE_RESUME_RUN_ID }}
+          github-token: ${{ github.token }}
       - name: Collect each dataset with explicit status
         env:
           REPORT_DATE: ${{ inputs.report_date }}

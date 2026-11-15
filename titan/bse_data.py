@@ -287,7 +287,9 @@ def adapt(context,page,key,target,dest,responses,result):
   if key=='shareholding':
    from titan.bse_details import latest_filings,fetch_details
    items=latest_filings(rows)
-   details,errors=fetch_details(page,items,dest,'ownership',target)
+   result['_detail_capture_active']=True
+   try:details,errors=fetch_details(page,items,dest,'ownership',target)
+   finally:result.pop('_detail_capture_active',None)
    result['detail_population']=len(items);result['detail_validated']=len(details);result['detail_errors']=errors
    if details:result['exports'].append(export_rows(dest,'latest_original_ownership',details,['scrip_code','url','quarter','tables'],r['url'],'Latest original filing per issuer in the one-year index; original ownership tables parsed and retained, no ownership-change inference'))
    result.update(status='VALIDATED_SNAPSHOT' if len(details)==len(items) and not errors else 'PARTIAL',coverage='One-year filing index plus latest original ownership tables per issuer. Earlier-quarter comparisons remain research work, not completed by acquisition.')
@@ -397,7 +399,9 @@ def adapt(context,page,key,target,dest,responses,result):
   codes=sorted({str(x['SCRIP_CD']) for x in population})
   if any(not re.fullmatch(r'\d{6}',x) for x in codes):raise ValueError('Invalid active-universe code')
   items=[{'scrip_code':x,'url':'https://api.bseindia.com/BseIndiaAPI/api/PriceBand/w?scripcode='+x} for x in codes]
-  details,errors=fetch_details(page,items,dest,'bands',target)
+  result['_detail_capture_active']=True
+  try:details,errors=fetch_details(page,items,dest,'bands',target)
+  finally:result.pop('_detail_capture_active',None)
   result.update(universe_rows=len(population),unique_codes=len(codes),validated_codes=len(details),detail_errors=errors,
     status='VALIDATED_SNAPSHOT' if len(details)==len(codes) and not errors else 'PARTIAL',
     coverage='All active Equity T+1 codes returned by official master; returned price-band dates retained separately. Snapshot coverage does not prove target-session effective applicability.',effective_applicability='UNVERIFIED; do not substitute snapshot dates for official effective-session instructions')
@@ -418,7 +422,7 @@ def collect_one(context,key,target,out):
  result={'dataset':key,'description':label,'requested_report_date':target,'started_at':now(),'source_url':ROOT+path,'status':'STARTED','coverage':'UNVERIFIED','drive_status':'NOT_TRANSFERRED'}
  page=context.new_page();page.set_default_timeout(20_000)
  def receive(r):
-  if not official(r.url):return
+  if not official(r.url) or result.get('_detail_capture_active'):return
   if r.status in [401,403,429]:blocks.append({'url':r.url,'status':r.status})
   ct=r.headers.get('content-type','').lower()
   if ('json' in ct or 'xml' in ct or 'csv' in ct):
@@ -499,6 +503,7 @@ def main():
   if m:dataset_selection=m.group(1)
  names=list(SOURCES) if dataset_selection=='all' else dataset_selection.split(',')
  if not set(names)<=set(SOURCES):p.error('Unknown dataset')
+ names=[n for n in names if n not in ['price_bands','shareholding']]+[n for n in ['price_bands','shareholding'] if n in names]
  started=now();results=[]
  from playwright.sync_api import sync_playwright
  with sync_playwright() as pw:
