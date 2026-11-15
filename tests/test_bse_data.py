@@ -83,3 +83,17 @@ class SessionDateTests(unittest.TestCase):
   with self.assertRaises(RuntimeError):self.plan('2027-01-01T08:30:00+05:30')
  def test_explicit_closed_date_rejected(self):
   with self.assertRaises(ValueError):self.plan('2026-11-15T22:00:00+05:30','2026-11-15')
+
+class DetailTests(unittest.TestCase):
+ def test_latest_original_keeps_quarter_and_publication(self):
+  from titan.bse_details import latest_filings
+  base={'FLD_ScripCode':500001,'XBRLAttachment':'/XBRLFILES/500001_a.html','sQtrName':'September 2026','EndDate':'2026-10-01','D':'2026-11-01'}
+  out=latest_filings([base,{**base,'D':'2026-11-14','XBRLAttachment':'/XBRLFILES/500001_b.html'}])
+  self.assertEqual(len(out),1);self.assertEqual(out[0]['quarter'],'September 2026');self.assertTrue(out[0]['url'].endswith('_b.html'))
+ def test_original_issuer_mismatch_fails(self):
+  from titan.bse_details import latest_filings
+  with self.assertRaises(ValueError):latest_filings([{'FLD_ScripCode':500001,'XBRLAttachment':'/500002_a.html'}])
+ def test_tables_preserve_labels_and_zero(self):
+  from titan.bse_details import Tables
+  p=Tables();p.feed('<table><tr><th>Shareholding</th><th>Percent</th></tr><tr><td>Promoter</td><td>0</td></tr></table>')
+  self.assertEqual(p.tables[0][1],['Promoter','0'])

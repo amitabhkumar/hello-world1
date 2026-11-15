@@ -284,7 +284,13 @@ def adapt(context,page,key,target,dest,responses,result):
   result['exports']=[export_rows(dest,key,rows,keys,m['url'] if key=='breadth' else r['url'],scope)]
   if key=='breadth' and not all(str(x['DTTM']).startswith(target) for x in rows):raise ValueError('Breadth date mismatch')
   result.update(status='VALIDATED_SNAPSHOT',coverage=scope,point_in_time_reconstruction=False)
-  if key=='shareholding':result['status']='PARTIAL'
+  if key=='shareholding':
+   from titan.bse_details import latest_filings,fetch_details
+   items=latest_filings(rows)
+   details,errors=fetch_details(page,items,dest,'ownership',target)
+   result['detail_population']=len(items);result['detail_validated']=len(details);result['detail_errors']=errors
+   if details:result['exports'].append(export_rows(dest,'latest_original_ownership',details,['scrip_code','url','quarter','tables'],r['url'],'Latest original filing per issuer in the one-year index; original ownership tables parsed and retained, no ownership-change inference'))
+   result.update(status='VALIDATED_SNAPSHOT' if len(details)==len(items) and not errors else 'PARTIAL',coverage='One-year filing index plus latest original ownership tables per issuer. Earlier-quarter comparisons remain research work, not completed by acquisition.')
   if key=='corporate_actions':
    dates=[datetime.strptime(str(x['exdate']),'%Y%m%d').date() for x in rows]
    ok=all(start<=d<=end for d in dates)
@@ -298,8 +304,6 @@ def adapt(context,page,key,target,dest,responses,result):
     candidates=[r for r in responses if 'BulkDealData_ng/w' in r['url'] and parse_qs(urlparse(r['url']).query).get('DealType')==[value] and r.get('http_status')==200]
     if not candidates:raise ValueError('Missing dated '+label+' response')
     r=candidates[-1];obj=safe_json_bytes((dest/r['file']).read_bytes());rows=obj.get('Table')
-    if not isinstance(rows,list):
-     obj,m=browser_json(page,r['url'],dest,label+'_explicit_date');result.setdefault('requests',[]).append(m);rows=obj.get('Table') if isinstance(obj,dict) else None
     print('DEAL_PAYLOAD '+json.dumps({'type':label,'payload':obj if not rows else {'rows':len(rows),'first':rows[0]}},ensure_ascii=False),flush=True)
     params=parse_qs(urlparse(r['url']).query);d=date.fromisoformat(target).strftime('%d/%m/%Y')
     if params.get('FDate')!=[d] or params.get('TDate')!=[d]:raise ValueError('Deal date filter mismatch')
@@ -385,18 +389,19 @@ def adapt(context,page,key,target,dest,responses,result):
   result['special_session_notices']=[line for line in snap['text'].splitlines() if 'Muhurat' in line or 'separate circular' in line]
   result.update(status='VALIDATED_DATED_RECORDS',coverage='Annual equity holiday table; special-session notice retained separately and exact hours must be confirmed from later circulars')
  elif key=='price_bands':
-  result.update(status='PARTIAL',coverage='One-security acquisition probe only (532755). Exchange-wide price-band collection and official effective-date/unit validation remain pending.')
-  seen_urls=set()
-  for r in reversed(relevant):
-   if r['url'] in seen_urls:continue
-   seen_urls.add(r['url'])
-   if 'priceband' in r['url'].lower() or 'priceband' in json.dumps(r.get('arrays',[])).lower():
-    obj=safe_json_bytes((dest/r['file']).read_bytes())
-    print('PRICE_BAND_PAYLOAD '+json.dumps({'source_url':r['url'],'payload':obj},ensure_ascii=False),flush=True)
-    arrays=row_arrays(obj)
-    if not arrays and isinstance(obj,dict) and any(k in obj for k in ['UpperT','LowerT','PBpcLC']):arrays=[('$',[obj])]
-    for i,(p,rows) in enumerate(arrays):
-     result['exports'].append(export_rows(dest,'price_band_probe_%03d'%i,rows,list(rows[0]),r['url'],'Single-security probe: 532755. Values are not approved universe-wide risk filters.'))
+  from titan.bse_details import fetch_details
+  master_url='https://api.bseindia.com/BseIndiaAPI/api/ListofScripData_new/w?Group=&Scripcode=&segment=Equity&status=Active&scripName='
+  master,meta=browser_json(page,master_url,dest,'price_band_universe');result['requests']=[meta]
+  population=master.get('Table') if isinstance(master,dict) else master
+  require_rows(population,['SCRIP_CD','ISIN_NUMBER','Status','Segment'])
+  codes=sorted({str(x['SCRIP_CD']) for x in population})
+  if any(not re.fullmatch(r'\d{6}',x) for x in codes):raise ValueError('Invalid active-universe code')
+  items=[{'scrip_code':x,'url':'https://api.bseindia.com/BseIndiaAPI/api/PriceBand/w?scripcode='+x} for x in codes]
+  details,errors=fetch_details(page,items,dest,'bands',target)
+  result.update(universe_rows=len(population),unique_codes=len(codes),validated_codes=len(details),detail_errors=errors,
+    status='VALIDATED_SNAPSHOT' if len(details)==len(codes) and not errors else 'PARTIAL',
+    coverage='All active Equity T+1 codes returned by official master; returned price-band dates retained separately. Snapshot coverage does not prove target-session effective applicability.',effective_applicability='UNVERIFIED; do not substitute snapshot dates for official effective-session instructions')
+  if details:result['exports']=[export_rows(dest,'price_band_universe_snapshot',details,['scrip_code','UpperT','LowerT','PBdate','date_relation'],master_url,result['coverage'])]
  elif key=='preopen':
   minutes=datetime.now(IST).hour*60+datetime.now(IST).minute
   result.update(status='NOT_APPLICABLE' if not 540<=minutes<=555 else 'SOURCE_ONLY',
