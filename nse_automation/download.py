@@ -328,9 +328,16 @@ def main():
                         for file in out.glob("*.effective.json"):
                             evidence.append(json.loads(file.read_text()))
                         records = reconcile(reg_records,master_rows,bands,evidence,target_effective.isoformat())
+                        active = [r for r in records if r['regulatory_snapshot_status']=='Active']
+                        coverage = dict(reg1_records=len(records),active_reg1_records=len(active),
+                            matched_master_records=sum(r['master_snapshot'] is not None for r in records),
+                            active_with_band_classification=sum(r['band_snapshot_status']!='UNKNOWN' for r in active),
+                            target_date_band_rows_verified=sum(r['band_effective_status']=='ROW_MATCH_VERIFIED' for r in records),
+                            known_dated_prohibitions=sum(r['trading_access']=='Blocked' for r in records),
+                            scope='Coverage of REG1 snapshot only; not an exchange-wide active-security or live-permission claim')
                         (out/"security_access_evidence.json").write_text(json.dumps(dict(
                             report_date=target.isoformat(),target_date=target_effective.isoformat(),
-                            master=master_item,records=records,
+                            master=master_item,records=records,coverage=coverage,
                             scope="Snapshot interpretation; missing applicability/notices remain explicit"),indent=2))
                         m["security_access_status"]="EVIDENCE_JOINED_WITH_EXPLICIT_PENDING_CHECKS"
                 except Exception as e:

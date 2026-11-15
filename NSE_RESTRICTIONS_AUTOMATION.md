@@ -63,3 +63,12 @@ The workflow runs all test_nse_*.py tests before acquisition. Schedules, publica
 - https://nsearchives.nseindia.com/content/circulars/CMTR74466.zip
 - https://nsearchives.nseindia.com/content/circulars/CMTR74969.zip
 - https://nsearchives.nseindia.com/content/circulars/SURV76993.zip
+
+
+### 15 November 2026 acceptance and reconciliation correction
+- Run 43670166789 preserved the actual rejected download URLs: official All Reports links used nsearchives.nseindia.in. The explicit HTTPS host allowlist now includes this observed archive host; arbitrary subdomains, non-HTTPS and blob URLs remain rejected.
+- Run 43670676638 (push, commit b00ed9cc35cacd927e2cbdebdfaa50a63883943f) acquired all seven selected reports successfully. Artifact 14144132346 SHA256 be1a2be647dffdf8d9f893c9ac5e4d111aeb047d4ec66cfabad376ca148b0a2c. This is push acceptance, not proof of scheduled delivery.
+- Separate band_snapshot_status and regulatory_snapshot_status from target-date applicability and trading_access. Explicit 'No Band' means NO_FIXED_BAND_REPORTED; blanks remain UNKNOWN. It does not by itself certify F&O membership.
+- Coverage reports active REG1 rows, exact symbol/series master matches and active rows with band classifications. REG1-population coverage is not an exchange-wide completeness claim.
+- resolve_band_timeline implements date-normalized, latest-applicable changes over an externally verified baseline and continuous change coverage. It rejects missing coverage, identity ambiguity and conflicting same-date revisions, retains unaffected rows and separates future changes. It is NOT used to fabricate baseline applicability: current complete-list applicability is still unverified. Its tests are diagnostic implementation tests, not exchange evidence.
+- Original record 20261114_EVENING_R001 is unchanged. Observed remaining requirements: complete-band and MII snapshot applicability for target 16 November; subsequent security notices; live session status when that mode starts. Known dated suspension remains blocking.

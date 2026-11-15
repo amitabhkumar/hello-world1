@@ -2,7 +2,42 @@ import csv
 import gzip
 import io
 import unittest
-from nse_automation.access import official_url, decode_master, master_record, reconcile
+from nse_automation.access import official_url, decode_master, master_record, reconcile, resolve_band_timeline, band_status
+
+class BandTimeline(unittest.TestCase):
+    def run_case(self, deltas, **kw):
+        args=dict(baseline_effective_date='2026-11-12',coverage_through='2026-11-16')
+        args.update(kw)
+        return resolve_band_timeline([dict(Symbol='X',Series='EQ',Band='20'),
+                                      dict(Symbol='Y',Series='EQ',Band='5')],
+                                     deltas,'2026-11-16',**args)
+    def delta(self, day, value, **kw):
+        return dict(Symbol='X',Series='EQ',Effective_Date=day,To=value,**kw)
+    def test_latest_applicable_and_unchanged(self):
+        r=self.run_case([self.delta('20261116','5'),self.delta('13-Nov-2026','10')])
+        self.assertEqual([x['Band'] for x in r['records']],['5','5'])
+    def test_future_separate(self):
+        r=self.run_case([self.delta('2026-11-17','2')])
+        self.assertEqual(r['records'][0]['Band'],'20');self.assertEqual(len(r['future_deltas']),1)
+    def test_old_delta_does_not_roll_back(self):
+        self.assertEqual(self.run_case([self.delta('2026-11-11','2')])['records'][0]['Band'],'20')
+    def test_conflicting_revision(self):
+        with self.assertRaisesRegex(ValueError,'CONFLICTING'):
+            self.run_case([self.delta('2026-11-13','5'),self.delta('2026-11-13','10')])
+    def test_duplicate_identical_delta(self):
+        d=self.delta('2026-11-13','5')
+        self.assertEqual(self.run_case([d,d])['records'][0]['Band'],'5')
+    def test_missing_coverage_rejected(self):
+        with self.assertRaisesRegex(ValueError,'COVERAGE'):
+            self.run_case([],coverage_through='2026-11-13')
+    def test_series_mismatch_rejected(self):
+        d=self.delta('2026-11-13','5');d['Series']='BE'
+        with self.assertRaisesRegex(ValueError,'IDENTITY'):self.run_case([d])
+    def test_blank_not_dynamic(self):
+        self.assertEqual(band_status(''),'UNKNOWN')
+        self.assertEqual(band_status('No Band'),'NO_FIXED_BAND_REPORTED')
+        self.assertEqual(band_status('NaN'),'UNKNOWN')
+        self.assertEqual(band_status('20'),'FIXED_PERCENT_BAND')
 
 class AccessEvidence(unittest.TestCase):
     def setUp(self):

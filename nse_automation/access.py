@@ -8,6 +8,7 @@ import gzip
 import hashlib
 import io
 import re
+from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
@@ -56,6 +57,74 @@ def parse_range(value):
     if not lo.is_finite() or not hi.is_finite() or lo <= 0 or hi < lo:
         return None
     return {'lower_inr': str(lo), 'upper_inr': str(hi)}
+
+def normalize_date(value):
+    if isinstance(value, date):
+        return value.date() if isinstance(value, datetime) else value
+    for fmt in ('%Y-%m-%d', '%d-%b-%Y', '%Y%m%d', '%d%m%Y'):
+        try:
+            return datetime.strptime(str(value).strip(), fmt).date()
+        except ValueError:
+            pass
+    raise ValueError('INVALID_EFFECTIVE_DATE: ' + str(value))
+
+def band_status(value):
+    """Blank is missing; explicit No Band does not prove derivative membership."""
+    value = str(value or '').strip()
+    if value.lower() == 'no band':
+        return 'NO_FIXED_BAND_REPORTED'
+    try:
+        n = Decimal(value)
+        if n.is_finite() and 0 < n <= 100:
+            return 'FIXED_PERCENT_BAND'
+    except InvalidOperation:
+        pass
+    return 'UNKNOWN'
+
+def resolve_band_timeline(baseline_rows, deltas, target_date, *,
+                          baseline_effective_date, coverage_through):
+    """Apply verified deltas to a verified baseline, never manufacture its dates.
+
+    Caller must supply independently verified baseline applicability and continuous
+    official delta coverage. Dates are evidence inputs, not inferred from filenames.
+    Rows require Symbol/Series/Band; deltas require Symbol/Series/To/Effective_Date.
+    Conflicting same-day revisions require explicit supersession, not row ordering.
+    This pure evaluator does not fetch, certify evidence or grant trading access.
+    """
+    target = normalize_date(target_date)
+    start = normalize_date(baseline_effective_date)
+    end = normalize_date(coverage_through)
+    if not start <= target <= end:
+        raise ValueError('BASELINE_OR_DELTA_COVERAGE_DOES_NOT_COVER_TARGET')
+    result = {}
+    for row in baseline_rows:
+        key = (row.get('Symbol'), row.get('Series'))
+        if not all(key) or key in result:
+            raise ValueError('MISSING_OR_DUPLICATE_BASELINE_IDENTITY')
+        result[key] = dict(row, Effective_Date=start.isoformat())
+    grouped, future = {}, []
+    for row in deltas:
+        key = (row.get('Symbol'), row.get('Series'))
+        if not all(key):
+            raise ValueError('DELTA_SERIES_REQUIRED')
+        effective = normalize_date(row['Effective_Date'])
+        if effective > target:
+            future.append(dict(row))
+            continue
+        if effective < start:
+            continue
+        if key not in result:
+            raise ValueError('DELTA_IDENTITY_NOT_IN_BASELINE: ' + repr(key))
+        grouped.setdefault((key, effective), set()).add(str(row['To']).strip())
+    for (key, effective), values in sorted(grouped.items(), key=lambda x:x[0][1]):
+        if len(values) != 1:
+            raise ValueError('CONFLICTING_SAME_DATE_REVISIONS: ' + repr(key))
+        value = next(iter(values))
+        if band_status(value) == 'UNKNOWN':
+            raise ValueError('INVALID_DELTA_BAND')
+        result[key].update(Band=value, Effective_Date=effective.isoformat())
+    return dict(records=list(result.values()), future_deltas=future,
+                target_date=target.isoformat(), coverage_through=end.isoformat())
 
 def master_record(row):
     unknown = []
@@ -124,12 +193,18 @@ def reconcile(reg_records, master_rows, band_rows, band_evidence, target_date):
         reasons.extend(['MASTER_TARGET_DATE_APPLICABILITY_REQUIRES_DATED_CONFIRMATION',
                         'SUBSEQUENT_SECURITY_NOTICES_AND_LIVE_STATUS_NOT_RECONCILED'])
         constraints = reg.get('session_constraints') or {}
+        reasons.extend(constraints.get('unknown_inputs', []))
+        unknown_indicators = [k for k,v in reg.get('indicators', {}).items()
+                              if v.get('meaning') == 'Unknown']
+        reasons.extend('UNMAPPED_REG1_FIELD:' + k for k in unknown_indicators)
         # REG1's dated prohibition remains enforceable independent of master ambiguity.
         access = 'Blocked' if scope_current and constraints.get('blockers') else 'Unknown'
         output.append(dict(symbol=key[0],series=key[1],target_date=target_date,
                            reg1_effective_date=reg.get('effective_trading_date'),
                            gsm_esm_constraints=constraints,master_snapshot=master,
                            band_percent_raw=band,band_effective_date=target_date if verified else None,
+                           band_snapshot_status=band_status(band),
+                           regulatory_snapshot_status=reg.get('snapshot_status','Unknown'),
                            band_effective_status='ROW_MATCH_VERIFIED' if verified else 'UNKNOWN',
                            trading_access=access,pending_checks=reasons))
     return output
