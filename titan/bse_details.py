@@ -1,5 +1,5 @@
 """Bounded parallel public BSE detail acquisition. No download retries."""
-import json, re, base64, os, time
+import json, re, base64, os, time, hashlib
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import urljoin
@@ -32,14 +32,19 @@ class Tables(HTMLParser):
 def fetch_details(page,items,dest,kind,target):
  from titan.bse_data import official,write_blob,now,parse_source_date
  from decimal import Decimal
- rows=[];errors=[];blocked=False;cache={}
+ rows=[];errors=[];blocked=False;cache={};cache_receipts={}
  resume=os.getenv('BSE_RESUME_DIRECTORY')
  if resume and kind=='ownership':
   root=Path(resume)/'shareholding'
   old=json.loads((root/'shareholding_one_year.json').read_text())['Table']
+  receipt_file=root/'ownership_receipts.json'
+  if receipt_file.exists():cache_receipts={r['url']:r for r in json.loads(receipt_file.read_text())}
   for entry in latest_filings(old):
    f=root/('ownership_'+entry['scrip_code']+'.html')
-   if f.exists():cache[entry['url']]=f
+   if f.exists():
+    receipt=cache_receipts.get(entry['url'])
+    if receipt_file.exists() and (not receipt or hashlib.sha256(f.read_bytes()).hexdigest()!=receipt['sha256']):continue
+    cache[entry['url']]=f
  # Eight in-flight requests maximum; no retries or evasion. Preserve each response.
  for offset in range(0,len(items),8):
   deadline=os.getenv('BSE_RUN_DEADLINE_MONOTONIC')
@@ -60,7 +65,7 @@ def fetch_details(page,items,dest,kind,target):
   it=iter(network_replies)
   replies=[{'status':200,'url':x['url'],'b64':base64.b64encode(cache[x['url']].read_bytes()).decode(),'cached':True} if x['url'] in cache else next(it) for x in batch]
   for item,reply in zip(batch,replies):
-   entry={**item,'retrieved_at':None if reply.get('cached') else now(),'validated_at':now(),'requested_report_date':target,'reused_from_run':os.getenv('BSE_RESUME_RUN_ID') if reply.get('cached') else None,'retrieval_note':'Original per-file retrieval time unavailable in interrupted run; source artifact preserved' if reply.get('cached') else 'Live response'}
+   entry={**item,'retrieved_at':cache_receipts.get(item['url'],{}).get('retrieved_at') if reply.get('cached') else now(),'validated_at':now(),'requested_report_date':target,'reused_from_run':(os.getenv('BSE_RESUME_RUN_ID') or os.getenv('BSE_CACHE_SOURCE_RUN_ID')) if reply.get('cached') else None,'retrieval_note':'Original per-file retrieval time unavailable in interrupted run; source artifact preserved' if reply.get('cached') else 'Live response'}
    try:
     if reply.get('status') in (401,403,429):blocked=True
     if reply.get('status')!=200:raise ValueError('HTTP '+str(reply.get('status'))+' '+reply.get('error',''))

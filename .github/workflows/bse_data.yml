@@ -33,6 +33,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Restore immutable original-filings cache
+        uses: actions/cache/restore@v4
+        with:
+          path: bse_original_cache
+          key: bse-originals-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bse-originals-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -45,6 +51,7 @@ jobs:
         run: |
           python - <<'PYCODE'
           import os,json,re
+          from pathlib import Path
           value=os.getenv('REQUESTED_RESUME_RUN','')
           if not value and os.getenv('GITHUB_EVENT_NAME')=='push':
               event=json.load(open(os.environ['GITHUB_EVENT_PATH']))
@@ -54,6 +61,10 @@ jobs:
           if value:
               with open(os.environ['GITHUB_ENV'],'a') as out:
                   out.write('BSE_RESUME_RUN_ID='+value+'\nBSE_RESUME_DIRECTORY=bse_resume\n')
+          elif Path('bse_original_cache/shareholding/shareholding_one_year.json').exists():
+              origin=json.load(open('bse_original_cache/source_run.json'))['run_id']
+              with open(os.environ['GITHUB_ENV'],'a') as out:
+                  out.write('BSE_RESUME_DIRECTORY=bse_original_cache\nBSE_CACHE_SOURCE_RUN_ID='+str(origin)+'\n')
           PYCODE
       - name: Restore completed artifact for immutable-original reuse
         if: env.BSE_RESUME_RUN_ID != ''
@@ -72,6 +83,36 @@ jobs:
           args=(--datasets "${DATASETS:-all}")
           if [ -n "$REPORT_DATE" ]; then args+=(--date "$REPORT_DATE"); fi
           xvfb-run --auto-servernum python -m titan.bse_data "${args[@]}"
+      - name: Prepare verified originals for next unattended run
+        if: always()
+        id: originals
+        run: |
+          python - <<'PYCODE'
+          import os,json,shutil,hashlib
+          from pathlib import Path
+          source=Path('bse_data_output/shareholding')
+          receipts=source/'ownership_receipts.json'
+          if receipts.exists():
+              rows=json.loads(receipts.read_text())
+              cache=Path('bse_original_cache')
+              if cache.exists():shutil.rmtree(cache)
+              dest=cache/'shareholding';dest.mkdir(parents=True)
+              shutil.copy2(source/'shareholding_one_year.json',dest/'shareholding_one_year.json')
+              kept=[]
+              for row in rows:
+                  f=source/row['file']
+                  if not f.exists() or hashlib.sha256(f.read_bytes()).hexdigest()!=row['sha256']:continue
+                  shutil.copy2(f,dest/f.name);kept.append(row)
+              (dest/'ownership_receipts.json').write_text(json.dumps(kept))
+              (cache/'source_run.json').write_text(json.dumps({'run_id':os.environ['GITHUB_RUN_ID'],'count':len(kept)}))
+              with open(os.environ['GITHUB_OUTPUT'],'a') as out:out.write('ready=true\n')
+          PYCODE
+      - name: Save immutable originals for unattended reuse
+        if: always() && steps.originals.outputs.ready == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: bse_original_cache
+          key: bse-originals-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preserve all successes and failures
         if: always()
         uses: actions/upload-artifact@v4
