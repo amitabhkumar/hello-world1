@@ -1,0 +1,39 @@
+name: NSE final equity delivery and indices
+on:
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: Optional exact eligible YYYY-MM-DD
+        type: string
+        required: false
+  push:
+    paths: ['nse_automation/market_data.py', '.github/workflows/nse_market_data.yml']
+  schedule:
+    - cron: '0 3 * * 1-5'
+    - cron: '0 11 * * 1-5'
+    - cron: '30 16 * * *'
+    - cron: '30 2 * * 6'
+permissions:
+  contents: read
+concurrency:
+  group: nse-final-market-data
+  cancel-in-progress: false
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Acquire exact eligible final files once
+        env:
+          REPORT_DATE: ${{ inputs.report_date }}
+        run: python -m nse_automation.market_data
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nse-market-${{ github.run_id }}-${{ github.run_attempt }}
+          path: nse-market-output/
+          retention-days: 90
