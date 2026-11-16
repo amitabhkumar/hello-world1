@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 import sys
 import zipfile
@@ -256,7 +257,9 @@ def main():
     if any(args.output.iterdir()):
         parser.error('Output directory must be empty; use a new run directory')
     manifest = {'started_at': datetime.now(IST).isoformat(), 'status': 'STARTED',
-                'drive_status': 'NOT_TRANSFERRED', 'calendar_status': 'VERIFY_IN_SOP_TASK'}
+                'drive_status': 'NOT_TRANSFERRED', 'calendar_status': 'VERIFY_IN_SOP_TASK',
+                'run_id': os.getenv('GITHUB_RUN_ID'), 'attempt': os.getenv('GITHUB_RUN_ATTEMPT'),
+                'commit': os.getenv('GITHUB_SHA')}
     code = 1
     try:
         now=datetime.now(IST)
