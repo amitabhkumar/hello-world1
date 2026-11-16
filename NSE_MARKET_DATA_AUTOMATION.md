@@ -1,0 +1,9 @@
+# NSE final equity/delivery and index files
+
+Use `.github/workflows/nse_market_data.yml` and `nse_automation/market_data.py`. This replaces reliance on ad-hoc quote API calls for final post-market population and outcomes; quote snapshots remain optional provisional evidence, never a substitute for final prices.
+
+The shared official NSE calendar selects the previous eligible session in the morning and the current eligible session after16:00. Closed dates use the latest eligible session. Same-day requests before20:35IST produce PENDING_PUBLICATION_WINDOW without an exchange request. At/after20:35 a single exact-date request is made for equity/delivery and index files; failed required-date files are unavailable, with no older substitution or retry loop. Coverage outside verified calendar years fails explicitly. Existing SOP trigger slots are preserved:08:30/16:30weekdays,22:00daily,08:00Saturday. These triggers do not prove punctual delivery.
+
+Artifacts `nse-market-RUN_ID-ATTEMPT` retain90days. The manifest separates report date, retrieval timestamp and unknown publication timestamp. Validate artifact/CSV hashes, all-row dates and schema independently, then metric/price/corporate-action quality before analysis. Persist and read back through authorized storage connectors. No runner Drive authentication is claimed.
+
+Live push acceptance43908042799 at commit4c540e418552c3201edcc5b01e0905f4b53c05b7 retrieved16November2026:3600equity/delivery rows and146index rows. This is live acquisition evidence, not future scheduled-delivery proof. Keep the earlier pre-publication404 and API403 failures as historical records; annotate publication pending versus source-access failure separately. Preserve original forecasts and cutoffs. Recompute later final outcomes only in append-only supplements.
