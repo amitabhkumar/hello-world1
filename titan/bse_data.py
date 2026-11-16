@@ -239,10 +239,15 @@ def adapt(context,page,key,target,dest,responses,result):
   # The current official page does not always issue the report on initial load.
   # Submit its real defaults once, rather than inventing empty API filters.
   result['pledge_form_before_submit']=snapshot_page(page)['inputs']
-  with page.expect_response(lambda r: 'GetCorpPledgeShareholding_ng' in r.url and official(r.url), timeout=90_000):
-   submit(page)
-  settled(page)
-  result['pledge_acquisition']='Official page Submit once; captured response; no download retry'
+  try:
+   _,observed=matched(responses,dest,'GetCorpPledgeShareholding_ng')
+   require_rows(observed.get('Table') if isinstance(observed,dict) else observed,['ScripCode','Noofsharespledged'])
+   result['pledge_acquisition']='Reused valid initial-page response; no duplicate Submit/request'
+  except ValueError:
+   with page.expect_response(lambda r: 'GetCorpPledgeShareholding_ng' in r.url and official(r.url), timeout=90_000):
+    submit(page)
+   settled(page)
+   result['pledge_acquisition']='Official page Submit once; captured response; no download retry'
  if key=='security_master':
   page.locator('#ddlsegment').select_option('Equity');page.locator('#ddlstatus').select_option(label='Active');submit(page)
  if key in ['delivery','high_low']:
