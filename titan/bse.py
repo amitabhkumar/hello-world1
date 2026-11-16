@@ -117,6 +117,31 @@ def matching_url(href, target):
                          r'_F_0000\.csv(?:\.zip)?', unquote(u.path).split('/')[-1], re.I) is not None)
 
 
+def wait_for_date_form(page, target, out):
+    """Wait for the actual dated report form, never a Market Watch select.
+
+    This polls DOM readiness only; it does not retry navigation/downloads.
+    Keep the observed URL and controls even when navigation does not finish.
+    """
+    script = """year => {
+      const visible = s => !!(s.offsetWidth || s.offsetHeight || s.getClientRects().length);
+      const controls = [...document.querySelectorAll('select')].filter(visible);
+      const nums = s => [...s.options].map(o=>o.text.trim()).filter(x=>/^\\d+$/.test(x)).map(Number);
+      const hasYear = controls.some(s=>nums(s).includes(year));
+      const hasDay = controls.some(s=>Array.from({length:28},(_,i)=>i+1).every(n=>nums(s).includes(n)));
+      const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+      const hasMonth = controls.some(s=>months.every(m=>[...s.options].some(o=>o.text.trim().toLowerCase().slice(0,3)===m)) || (nums(s).length===12 && Array.from({length:12},(_,i)=>i+1).every(n=>nums(s).includes(n))));
+      return /bhav/i.test(location.pathname) && hasYear && hasDay && hasMonth;
+    }"""
+    try:
+        page.wait_for_function(script, arg=target.year, timeout=60_000)
+    finally:
+        state = page.evaluate("""() => ({url:location.href,title:document.title,controls:[...document.querySelectorAll('select')].map(s=>({id:s.id,name:s.name,visible:!!(s.offsetWidth||s.offsetHeight||s.getClientRects().length),options:[...s.options].map(o=>({text:o.text,value:o.value}))}))})""")
+        (out/'navigation_state.json').write_text(json.dumps(state,indent=2))
+        (out/'date_controls.json').write_text(json.dumps(state['controls'],indent=2))
+    return date_controls(state['controls'], target)
+
+
 def collect(candidates, out, now=None, explicit=None, manifest=None):
     from playwright.sync_api import sync_playwright, TimeoutError as BrowserTimeout
     blocked = []
@@ -167,12 +192,13 @@ def collect(candidates, out, now=None, explicit=None, manifest=None):
             page.locator("a:has-text('Markets'):visible, #menu-markets").first.click()
             page.locator("a:has-text('Equity'):visible").first.click()
             page.locator("a:has-text('Bhav Copy'):visible").first.click()
-            page.locator('select').first.wait_for()
-            check()
             for target in candidates:
-                controls=page.locator('select').evaluate_all("ss=>ss.map(s=>({id:s.id,name:s.name,visible:!!(s.offsetWidth||s.offsetHeight||s.getClientRects().length),options:[...s.options].map(o=>({text:o.text,value:o.value}))}))")
-                (out/'date_controls.json').write_text(json.dumps(controls,indent=2))
-                choices=date_controls(controls,target)
+                try:
+                    choices=wait_for_date_form(page,target,out)
+                except BrowserTimeout:
+                    check()
+                    raise RuntimeError('BHAVCOPY_FORM_NOT_READY: navigation/date form unavailable; see navigation_state.json (not a calendar/date-selection failure)')
+                check()
                 for role in ['year','month','day']:
                     index,value=choices[role]
                     page.locator('select').nth(index).select_option(value=value)
@@ -253,4 +279,5 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
+
 
