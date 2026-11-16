@@ -235,6 +235,14 @@ def extract_reference_files(dest,files):
 def adapt(context,page,key,target,dest,responses,result):
  result['exports']=[]
  if key=='announcements':announcement_pages(page,target,dest,responses,result);return
+ if key=='pledges':
+  # The current official page does not always issue the report on initial load.
+  # Submit its real defaults once, rather than inventing empty API filters.
+  result['pledge_form_before_submit']=snapshot_page(page)['inputs']
+  with page.expect_response(lambda r: 'GetCorpPledgeShareholding_ng' in r.url and official(r.url), timeout=90_000):
+   submit(page)
+  settled(page)
+  result['pledge_acquisition']='Official page Submit once; captured response; no download retry'
  if key=='security_master':
   page.locator('#ddlsegment').select_option('Equity');page.locator('#ddlstatus').select_option(label='Active');submit(page)
  if key in ['delivery','high_low']:
@@ -265,7 +273,6 @@ def adapt(context,page,key,target,dest,responses,result):
   try:r,obj=matched(responses,dest,term)
   except ValueError:
    known={
-    'pledges':'https://api.bseindia.com/BseIndiaAPI/api/GetCorpPledgeShareholding_ng/w?COMPANY=&Group=&Status=&Industryname=&PledgeRange=&DeriTrade=',
     'security_master':'https://api.bseindia.com/BseIndiaAPI/api/ListofScripData_new/w?Group=&Scripcode=&segment=Equity&status=Active&scripName='
    }
    if key not in known or result.get('access_errors'):raise
@@ -529,4 +536,5 @@ def main():
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
  return 0 if status=='COMPLETE' else 2
 if __name__=='__main__':sys.exit(main())
+
 
