@@ -285,7 +285,6 @@ def adapt(context,page,key,target,dest,responses,result):
  print('ADAPTER_DIAGNOSTIC '+json.dumps({'dataset':key,'inputs':[{**x,'options':(x.get('options') or [])[:12]} for x in snap['inputs'] if x.get('id')][-18:],'responses':result['observed_data_responses'],'tables_preview':[t[:3] for t in snap['tables']][:4]},ensure_ascii=False),flush=True)
  contracts={
   'security_master':('ListofScripData_new/w',['SCRIP_CD','ISIN_NUMBER','Status','Segment'],'Active Equity T+1 securities returned by official all-group endpoint; other statuses and segments excluded'),
-  'pledges':('GetCorpPledgeShareholding_ng',['ScripCode','Noofsharespledged'],'All records returned by unfiltered pledge endpoint; mixed reporting periods, not point-in-time reconstruction'),
   'shareholding':('Corp_Shareholding_ng',['FLD_ScripCode','EndDate'],'All industries; last one year of filing metadata requested; underlying ownership tables are linked, not parsed'),
   'corporate_actions':('DefaultData/w',['scrip_code','Ex_date','Purpose'],'All equity actions for requested 370-day history plus 30-day forward Ex Date window; raw actions, not adjustment factors'),
   'breadth':('tradinghighlight/w',['DTTM','Gainer','Loser'],'Source date-window market breadth'),
