@@ -96,7 +96,8 @@ def browser_json(page,url,dest,name):
  return safe_json_bytes(b),dict(url=url,retrieved_at=now(),http_status=x['status'],**meta)
 def announcement_pages(page,target,dest,responses,result):
  rec,_=matched(responses,dest,'AnnSubCategoryGetData')
- d=target.replace('-','');url=query_url(rec['url'],pageno=1,strPrevDate=d,strToDate=d)
+ start=result.get('requested_from_date',target)
+ d=target.replace('-','');url=query_url(rec['url'],pageno=1,strPrevDate=start.replace('-',''),strToDate=d)
  obj,meta=browser_json(page,url,dest,'ann_page_001');result['requests']=[meta]
  rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
  expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows);allrows=list(rows)
@@ -109,8 +110,8 @@ def announcement_pages(page,target,dest,responses,result):
  ids=[str(x['NEWSID']) for x in allrows]
  stable=int(check['Table1'][0]['ROWCNT'])==expected and [x['NEWSID'] for x in check['Table']]==[x['NEWSID'] for x in rows]
  unique=len(ids)==len(set(ids))
- dates_ok=all(str(x['NEWS_DT']).startswith(target) for x in allrows)
- result['exports']=[export_rows(dest,'announcements',allrows,['NEWSID','SCRIP_CD','NEWS_DT'],url,'All category corporate announcements for requested calendar date; linked attachments not downloaded')]
+ dates_ok=all(start<=str(x['NEWS_DT'])[:10]<=target for x in allrows)
+ result['exports']=[export_rows(dest,'announcements',allrows,['NEWSID','SCRIP_CD','NEWS_DT'],url,'All category corporate announcements for explicit inclusive date window; linked attachments not downloaded')]
  result.update(expected_rows=expected,pagination_stable=stable,unique_ids=unique,record_dates_match=dates_ok,
                status='VALIDATED_DATED_RECORDS' if stable and unique and dates_ok and len(allrows)==expected else 'PARTIAL',
                coverage='API row-count reconciliation; publication/submission timestamps retained; first-public-information still requires issuer research')
@@ -429,9 +430,10 @@ def adapt(context,page,key,target,dest,responses,result):
                 coverage='Adapter still requires endpoint-specific schema, date and coverage validation')
  result['diagnostic_links']=[x for x in snap['links'] if re.search(r'\.(zip|csv|xlsx?|pdf)(?:\?|$)',x['url'],re.I)]
 
-def collect_one(context,key,target,out):
+def collect_one(context,key,target,out,from_date=None):
  path,label=SOURCES[key];dest=out/key;dest.mkdir();responses=[];blocks=[];errors=[]
  result={'dataset':key,'description':label,'requested_report_date':target,'started_at':now(),'source_url':ROOT+path,'status':'STARTED','coverage':'UNVERIFIED','drive_status':'NOT_TRANSFERRED'}
+ if from_date:result['requested_from_date']=from_date
  page=context.new_page();page.set_default_timeout(20_000)
  def receive(r):
   if not official(r.url) or result.get('_detail_capture_active'):return
@@ -494,8 +496,9 @@ def dataset_dates(clock, explicit=None, calendar_dir=None):
    raise ValueError('Explicit report date is not an eligible BSE session')
   eod=event_day
  else:eod=targets(clock,holidays=holidays,calendar_years=years,special_sessions=special)[0]
- return {'event_date':event_day.isoformat(),'eod_date':eod.isoformat(),'calendar_evidence':evidence,
-         'policy':'Before 19:00 previous eligible session; after 19:00 latest eligible session; disclosure feeds retain calendar date'}
+ overlap=event_day if explicit else targets(clock.replace(hour=0,minute=0,second=0,microsecond=0),holidays=holidays,calendar_years=years,special_sessions=special)[0]
+ return {'event_date':event_day.isoformat(),'announcement_from_date':overlap.isoformat(),'eod_date':eod.isoformat(),'calendar_evidence':evidence,
+         'policy':'Before 19:00 previous eligible session; after 19:00 latest eligible session; disclosures overlap previous eligible session through execution date; older missed watermarks require reconciliation'}
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--date');p.add_argument('--datasets',default='all');p.add_argument('--output',type=Path,default=Path('bse_data_output'));args=p.parse_args()
@@ -532,7 +535,7 @@ def main():
     home.close()
     for n in names:
      dataset_target=date_plan['eod_date'] if n in EOD_DATASETS else target
-     x=collect_one(context,n,dataset_target,args.output);x['execution_calendar_date']=clock.date().isoformat();x['date_policy']=date_plan['policy'];results.append(x);print('DATASET_RESULT '+json.dumps({k:v for k,v in x.items() if k not in ['responses','observed_data_responses','calendar_tables','diagnostic_links']},ensure_ascii=False),flush=True)
+     x=collect_one(context,n,dataset_target,args.output,from_date=date_plan['announcement_from_date'] if n=='announcements' else None);x['execution_calendar_date']=clock.date().isoformat();x['date_policy']=date_plan['policy'];results.append(x);print('DATASET_RESULT '+json.dumps({k:v for k,v in x.items() if k not in ['responses','observed_data_responses','calendar_tables','diagnostic_links']},ensure_ascii=False),flush=True)
   except Exception as e:
    seen={x['dataset'] for x in results};results += [{'dataset':n,'status':'FAILED','error':str(e)} for n in names if n not in seen]
   finally:browser.close()
