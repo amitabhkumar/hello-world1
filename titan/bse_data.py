@@ -95,9 +95,8 @@ def browser_json(page,url,dest,name):
  b=x['text'].encode();meta=write_blob(dest,name+'.json',b)
  return safe_json_bytes(b),dict(url=url,retrieved_at=now(),http_status=x['status'],**meta)
 def announcement_json(page,url,dest,name):
- page.set_extra_http_headers({'Origin':'https://www.bseindia.com','Referer':'https://bseindia.com'})
- try:obj,meta=browser_json(page,url,dest,name)
- finally:page.set_extra_http_headers({})
+ # Let Chromium supply same-session Origin/Referer for the rendered official page.
+ obj,meta=browser_json(page,url,dest,name)
  if not isinstance(obj,dict) or 'Table' not in obj:raise ValueError('Announcement response missing Table; empty object is not zero records')
  return obj,meta
 
@@ -527,6 +526,7 @@ def collect_one(context,key,target,out,from_date=None):
    except Exception as e:rec['capture_error']=str(e)
    responses.append(rec)
  page.on('response',receive)
+ page.on('requestfailed',lambda req:result.setdefault('network_failures',[]).append({'url':req.url,'failure':req.failure,'at':now()}) if official(req.url) else None)
  try:
   if key=='pledges':
    pledge_with_reloads(page,target,dest,result)
