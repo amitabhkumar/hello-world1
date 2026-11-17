@@ -104,7 +104,7 @@ def announcement_json(page,url,dest,name):
 def pledge_csv(page,target,dest,result):
  # Official visible export; no manually generated pledge JSON request.
  control=page.locator("main a:has-text('CSV'),main button:has-text('CSV'),main [title*='Download'],main [aria-label*='Download'],main a:has(img[alt*='Download'])").filter(visible=True)
- control.first.wait_for(state='visible',timeout=60000)
+ control.first.wait_for(state='visible',timeout=30000)
  if control.count()!=1:raise ValueError('Pledge CSV export control missing or ambiguous')
  with page.expect_download(timeout=90000) as pending:control.click()
  download=pending.value
@@ -129,27 +129,80 @@ def pledge_csv(page,target,dest,result):
  result['exports']=[export_rows(dest,'pledges_csv_records',rows,[code]+pledged,page.url,'Official consolidated CSV snapshot; reporting periods and current as-on date are not historical reconstruction')]
  result.update(status='VALIDATED_SNAPSHOT',coverage='Official CSV export; current snapshot, not proof of complete historical coverage for requested date',source_asof_text=page.locator('main').inner_text()[:4000],historical_asof_verified=False)
 
+def transient_error(error):
+ if isinstance(error,PermissionError):return False
+ text=str(error).lower()
+ return any(word in text for word in ('failed to fetch','timeout','timed out','connection reset','connection closed','net::err_','response 500','response 502','response 503','response 504'))
+
+def bounded_attempt(operation,attempts,page,history,label):
+ for attempt in range(1,attempts+1):
+  try:
+   value=operation(attempt)
+   history.append({'operation':label,'attempt':attempt,'status':'SUCCESS','at':now()})
+   return value
+  except Exception as error:
+   retry=attempt<attempts and transient_error(error)
+   history.append({'operation':label,'attempt':attempt,'status':'ERROR','error':type(error).__name__+': '+str(error),'retry_planned':retry,'at':now()})
+   if not retry:raise
+   delay=2**(attempt-1);history[-1]['backoff_seconds']=delay
+   page.wait_for_timeout(delay*1000)
+
+def pledge_with_reloads(page,target,dest,result):
+ history=result.setdefault('attempt_history',[])
+ result['retry_policy']='3 total page/download attempts; 1s/2s backoff; no retry of access denial or invalid CSV'
+ def attempt(n):
+  response=page.goto(ROOT+SOURCES['pledges'][0],wait_until='domcontentloaded',timeout=40000) if n==1 else page.reload(wait_until='domcontentloaded',timeout=40000)
+  if response and response.status in [401,403,429]:raise PermissionError('Pledge page denied access: '+str(response.status))
+  if response and response.status>=500:raise RuntimeError('Pledge response '+str(response.status))
+  try:
+   if page_blocked(page.locator('body').inner_text(timeout=10000)):raise PermissionError('Pledge page access challenge')
+   pledge_csv(page,target,dest,result)
+  finally:
+   try:(dest/('page_attempt_%02d.json'%n)).write_text(json.dumps(snapshot_page(page),indent=2))
+   except Exception as e:result.setdefault('diagnostic_errors',[]).append(str(e))
+ return bounded_attempt(attempt,3,page,history,'pledge_page_and_export')
+
 def announcement_pages(page,target,dest,responses,result):
+ import random
  rec,_=matched(responses,dest,'AnnSubCategoryGetData')
  start=result.get('requested_from_date',target)
- d=target.replace('-','');url=query_url(rec['url'],pageno=1,strPrevDate=start.replace('-',''),strToDate=d)
- obj,meta=announcement_json(page,url,dest,'ann_page_001');result['requests']=[meta]
- rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
- expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows);allrows=list(rows)
- if expected>50000:raise ValueError('Announcement count exceeds explicit safety bound')
+ url=query_url(rec['url'],pageno=1,strPrevDate=date.fromisoformat(start).strftime('%Y%m%d'),strToDate=date.fromisoformat(target).strftime('%Y%m%d'))
+ result['requests']=[];history=result.setdefault('attempt_history',[])
+ result['retry_policy']='4 total attempts per page; 1s/2s/4s backoff; 0.5-0.8s pacing; no access-denial/schema retry'
+ def fetch(n,label):
+  if result['requests']:page.wait_for_timeout(random.uniform(500,800))
+  value=bounded_attempt(lambda attempt:announcement_json(page,query_url(url,pageno=n),dest,label+'_attempt_%02d'%attempt),4,page,history,label)
+  obj,meta=value;result['requests'].append(meta)
+  return obj
+ obj=fetch(1,'ann_page_001');rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
+ expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows)
+ if expected<1 or expected>50000:raise ValueError('Announcement count outside explicit safety bound')
+ result['expected_rows']=expected;unique={};duplicate_count=0
+ def add(records):
+  nonlocal duplicate_count
+  for row in records:
+   ident=str(row['NEWSID'])
+   if not ident.strip():raise ValueError('Empty NEWSID')
+   if ident in unique:
+    if unique[ident]!=row:raise ValueError('Conflicting records for NEWSID '+ident)
+    duplicate_count+=1
+   else:unique[ident]=row
+  result.update(captured_unique_rows=len(unique),duplicate_records=duplicate_count)
+  write_blob(dest,'announcements_partial_checkpoint.json',json.dumps(list(unique.values()),ensure_ascii=False).encode())
+ add(rows)
  for n in range(2,(expected+size-1)//size+1):
-  obj,m=announcement_json(page,query_url(url,pageno=n),dest,'ann_page_%03d'%n);result['requests'].append(m)
-  allrows.extend(require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT']))
- # Do not call a moving, offset-paginated feed complete without a stability check.
- check,m=announcement_json(page,url,dest,'ann_page_001_recheck');result['requests'].append(m)
- ids=[str(x['NEWSID']) for x in allrows]
+  obj=fetch(n,'ann_page_%03d'%n)
+  if int(obj['Table1'][0]['ROWCNT'])!=expected:raise ValueError('Announcement ROWCNT changed during pagination')
+  add(require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT']))
+ check=fetch(1,'ann_page_001_recheck')
  stable=int(check['Table1'][0]['ROWCNT'])==expected and [x['NEWSID'] for x in check['Table']]==[x['NEWSID'] for x in rows]
- unique=len(ids)==len(set(ids))
- dates_ok=all(start<=str(x['NEWS_DT'])[:10]<=target for x in allrows)
- result['exports']=[export_rows(dest,'announcements',allrows,['NEWSID','SCRIP_CD','NEWS_DT'],url,'All category corporate announcements for explicit inclusive date window; linked attachments not downloaded')]
- result.update(expected_rows=expected,pagination_stable=stable,unique_ids=unique,record_dates_match=dates_ok,
-               status='VALIDATED_DATED_RECORDS' if stable and unique and dates_ok and len(allrows)==expected else 'PARTIAL',
-               coverage='API row-count reconciliation; publication/submission timestamps retained; first-public-information still requires issuer research')
+ allrows=list(unique.values());dates_ok=all(start<=str(x['NEWS_DT'])[:10]<=target for x in allrows)
+ result.update(pagination_stable=stable,unique_ids=True,record_dates_match=dates_ok)
+ if len(allrows)!=expected:raise ValueError('Unique announcement count mismatch: %s != %s'%(len(allrows),expected))
+ if not stable or not dates_ok:raise ValueError('Announcement stability/date verification failed')
+ result['exports']=[export_rows(dest,'announcements',allrows,['NEWSID','SCRIP_CD','NEWS_DT'],url,'All category announcements for inclusive date window; attachments not assessed')]
+ result.update(status='VALIDATED_DATED_RECORDS',coverage='All unique rows reconciled to stable official ROWCNT; publication times retained; material attachments remain research work')
+
 def fill_dates(page,target):
  value=date.fromisoformat(target).strftime('%d/%m/%Y')
  loc=page.locator('input');filled=[]
@@ -475,6 +528,9 @@ def collect_one(context,key,target,out,from_date=None):
    responses.append(rec)
  page.on('response',receive)
  try:
+  if key=='pledges':
+   pledge_with_reloads(page,target,dest,result)
+   return result
   main=page.goto(ROOT+path,wait_until='domcontentloaded',timeout=40_000)
   page.wait_for_timeout(1500)
   text=page.locator('body').inner_text(timeout=10_000)
@@ -569,6 +625,7 @@ def main():
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
  return 0 if status=='COMPLETE' else 2
 if __name__=='__main__':sys.exit(main())
+
 
 
 
