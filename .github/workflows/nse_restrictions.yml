@@ -46,6 +46,21 @@ jobs:
           args=()
           if [ -n "$REPORT_DATE" ]; then args+=(--date "$REPORT_DATE"); fi
           xvfb-run --auto-servernum python nse_automation/download.py "${args[@]}"
+      - name: Optional verified Drive handoff
+        if: always()
+        continue-on-error: true
+        env:
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_INCOMING_FOLDER_ID: ${{ secrets.GDRIVE_INCOMING_FOLDER_ID }}
+          GDRIVE_LOGS_FOLDER_ID: ${{ secrets.GDRIVE_LOGS_FOLDER_ID }}
+        run: |
+          if [ -n "$GDRIVE_SERVICE_ACCOUNT_JSON" ]; then
+            python3 -m venv /tmp/titan-drive-venv
+            /tmp/titan-drive-venv/bin/pip install google-auth==2.40.3 requests==2.32.4
+            /tmp/titan-drive-venv/bin/python -m titan.drive_sync --root nse-output
+          else
+            python3 -m titan.drive_sync --root nse-output
+          fi
       - name: Preserve successful files and all failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,3 +69,4 @@ jobs:
           path: nse-output/
           retention-days: 90
           if-no-files-found: error
+

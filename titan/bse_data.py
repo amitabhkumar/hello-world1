@@ -161,18 +161,36 @@ def pledge_with_reloads(page,target,dest,result):
    except Exception as e:result.setdefault('diagnostic_errors',[]).append(str(e))
  return bounded_attempt(attempt,3,page,history,'pledge_page_and_export')
 
-def announcement_pages(page,target,dest,responses,result):
- import random
- rec,_=matched(responses,dest,'AnnSubCategoryGetData')
- start=result.get('requested_from_date',target)
- url=query_url(rec['url'],pageno=1,strPrevDate=date.fromisoformat(start).strftime('%Y%m%d'),strToDate=date.fromisoformat(target).strftime('%Y%m%d'))
- result['requests']=[];history=result.setdefault('attempt_history',[])
- result['retry_policy']='4 total attempts per page; 1s/2s/4s backoff; 0.5-0.8s pacing; no access-denial/schema retry'
- def fetch(n,label):
-  if result['requests']:page.wait_for_timeout(random.uniform(500,800))
-  value=bounded_attempt(lambda attempt:announcement_json(page,query_url(url,pageno=n),dest,label+'_attempt_%02d'%attempt),4,page,history,label)
-  obj,meta=value;result['requests'].append(meta)
+def announcement_ui_response(page,target,start,dest,result,n,label):
+ """One genuine UI action, one response; never manufacture a pagination URL."""
+ from urllib.parse import parse_qs
+ controls=page.locator('#idnext').filter(visible=True) if n!=1 else page.get_by_role('button',name='Submit',exact=True)
+ if not controls.count():raise ValueError('Required announcement UI control unavailable')
+ write_blob(dest,label+'_before_dom.json',json.dumps(snapshot_page(page),ensure_ascii=False).encode())
+ def matches(response):
+  if not official(response.url) or 'AnnSubCategoryGetData' not in response.url:return False
+  q=parse_qs(urlparse(response.url).query)
+  return q.get('pageno')==[str(n)] and q.get('strPrevDate')==[start.replace('-','')] and q.get('strToDate')==[target.replace('-','')]
+ try:
+  with page.expect_response(matches,timeout=90000) as event:
+   controls.first.click()
+  response=event.value;body=response.body()
+  meta=dict(url=response.url,http_status=response.status,retrieved_at=now(),**write_blob(dest,label+'.json',body))
+  result['requests'].append(meta)
+  if response.status!=200:raise ValueError('Announcement UI response HTTP '+str(response.status))
+  obj=safe_json_bytes(body)
+  if not isinstance(obj,dict) or 'Table' not in obj:raise ValueError('Announcement response missing Table')
+  page.get_by_text(re.compile(r'Current Page Number\s*'+str(n)+r'\s+out of')).first.wait_for(state='visible',timeout=30000)
   return obj
+ finally:
+  write_blob(dest,label+'_after_dom.json',json.dumps(snapshot_page(page),ensure_ascii=False).encode())
+
+def announcement_pages(page,target,dest,responses,result):
+ start=result.get('requested_from_date',target)
+ result['requests']=[]
+ result['retry_policy']='NONE; genuine UI Submit/Next clicks only; no synthetic pagination requests'
+ result['pagination_control']='Observed current BSE UI #idnext Next; advances each page including 6/11/16/21'
+ def fetch(n,label):return announcement_ui_response(page,target,start,dest,result,n,label)
  obj=fetch(1,'ann_page_001');rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
  expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows)
  if expected<1 or expected>50000:raise ValueError('Announcement count outside explicit safety bound')
@@ -199,7 +217,7 @@ def announcement_pages(page,target,dest,responses,result):
  result.update(pagination_stable=stable,unique_ids=True,record_dates_match=dates_ok)
  if len(allrows)!=expected:raise ValueError('Unique announcement count mismatch: %s != %s'%(len(allrows),expected))
  if not stable or not dates_ok:raise ValueError('Announcement stability/date verification failed')
- result['exports']=[export_rows(dest,'announcements',allrows,['NEWSID','SCRIP_CD','NEWS_DT'],url,'All category announcements for inclusive date window; attachments not assessed')]
+ result['exports']=[export_rows(dest,'announcements',allrows,['NEWSID','SCRIP_CD','NEWS_DT'],result['requests'][0]['url'],'All category announcements for inclusive date window; attachments not assessed')]
  result.update(status='VALIDATED_DATED_RECORDS',coverage='All unique rows reconciled to stable official ROWCNT; publication times retained; material attachments remain research work')
 
 def fill_dates(page,target):
@@ -324,7 +342,7 @@ def adapt(context,page,key,target,dest,responses,result):
  result['exports']=[]
  if key=='announcements':
   result['date_controls_filled']=fill_dates(page,target)
-  submit(page)
+  page.locator('#corporates-ann-from-date').fill(result.get('requested_from_date',target)[8:10]+'/'+result.get('requested_from_date',target)[5:7]+'/'+result.get('requested_from_date',target)[:4])
   announcement_pages(page,target,dest,responses,result);return
  if key=='pledges':pledge_csv(page,target,dest,result);return
  if key=='security_master':
@@ -625,6 +643,7 @@ def main():
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
  return 0 if status=='COMPLETE' else 2
 if __name__=='__main__':sys.exit(main())
+
 
 
 

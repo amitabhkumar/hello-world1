@@ -25,8 +25,8 @@ class RetryTests(unittest.TestCase):
    self.assertEqual(export.call_count,3);self.assertEqual(page.goto.call_count,1);self.assertEqual(page.reload.call_count,2)
    self.assertEqual(len(r['attempt_history']),3)
  def run_pages(self,objects):
-  p=MagicMock();r={};row={'url':'https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w'}
-  with tempfile.TemporaryDirectory() as td,patch.object(m,'matched',return_value=(row,{})),patch.object(m,'announcement_json',side_effect=[(o,{}) for o in objects]),patch.object(m,'export_rows',return_value={'rows':3}):
+  p=MagicMock();r={'requests':[{'url':'https://www.bseindia.com'}]};row={'url':'https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w'}
+  with tempfile.TemporaryDirectory() as td,patch.object(m,'matched',return_value=(row,{})),patch.object(m,'announcement_ui_response',side_effect=lambda *args: (args[4]['requests'].append({'url':'https://api.bseindia.com'}) or objects.pop(0))),patch.object(m,'export_rows',return_value={'rows':3}):
    m.announcement_pages(p,'2026-11-16',Path(td),[],r)
   return p,r
  def obj(self,ids,total=3):
@@ -43,3 +43,4 @@ class RetryTests(unittest.TestCase):
  def test_count_change_not_complete(self):
   with self.assertRaisesRegex(ValueError,'ROWCNT changed'):self.run_pages([self.obj(['a','b']),self.obj(['c'],4)])
 if __name__=='__main__':unittest.main()
+
