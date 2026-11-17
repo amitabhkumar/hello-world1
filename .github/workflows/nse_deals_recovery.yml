@@ -80,8 +80,8 @@ jobs:
               text=body.decode("utf-8-sig")
               if text.lstrip().startswith("<"):raise ValueError("HTML instead of CSV")
               reader=csv.DictReader(io.StringIO(text));rows=list(reader);r["rows"]=len(rows);r["fields"]=reader.fieldnames or []
-              required={"Date","Symbol","Security Name","Client Name","Buy / Sell","Quantity Traded","Trade Price / Wght. Avg. Price"}
-              if not required.issubset({k.strip() for k in r["fields"]}):raise ValueError("Missing required deal columns")
+              header_required={"Date","Symbol","Security Name","Client Name","Buy / Sell","Quantity Traded","Trade Price / Wght. Avg. Price"}
+              if not header_required.issubset({k.strip() for k in r["fields"]}):raise ValueError("Missing required deal columns")
               if not rows:
                r.update(status="EMPTY_SCHEMA_VALID_UNCONFIRMED",error="Header-only export; no-deal status not independently confirmed")
                confirmation_url=url.rsplit("&csv=true",1)[0]
