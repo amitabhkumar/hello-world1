@@ -84,3 +84,12 @@ Production now stops detail collection gracefully at45 minutes, before the60-min
 Run43735297296 completed cache seeding. A separate no-explicit-resume acceptance is recorded in the project receipt; do not infer actual future scheduled delivery or punctuality from these push tests. All exchange cron schedules remain unchanged. Source acquisition success does not complete a TITAN research scan or establish security-specific trading permission.
 
 Automatic-cache acceptance run43736045886 completed successfully with78 repository tests passing. It restored bse-originals-43735297296-1 without an explicit resume run ID and validated all5124 ownership filings withzero detail errors. The independently checked acceptance receipt records exact reuse and canonical saved files. These were push acceptances, not proof of punctual scheduled execution.
+
+
+## 17 November 2026 targeted CSV repair
+
+Announcements retain previous-eligible-session overlap on default runs. Exact-date acceptance inputs remain exact. The session warms up on https://bseindia.com; announcement requests use the browser context with explicit official Origin and Referer headers. Dates remain YYYYMMDD and pagination reconciles Table1 ROWCNT with unique records and a stable first-page recheck. Missing Table is an explicit failure, never zero announcements.
+
+Pledges use the official visible Consolidated Pledge CSV control and Playwright expect_download. Nonempty bytes, security identifiers, pledge columns and positive record count are required. The raw download and normalized records are preserved with SHA256. The current snapshot as-on text is retained separately from requested report date; this does not reconstruct historical pledge holdings. A missing/ambiguous export control or invalid download fails explicitly without JSON fallback or retry loops.
+
+Implementation commit 3d73d31bce30b2097b74c5c54880ff60d1374c4a; targeted live acceptance is recorded separately in project receipts. Initial run43997849237 failed before acquisition because an obsolete test asserted the retired JSON implementation. It is preserved; behavioral CSV tests replaced that assertion. No NSE, Bhavcopy source or cron definitions changed.
