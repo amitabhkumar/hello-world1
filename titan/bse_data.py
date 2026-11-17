@@ -18,7 +18,7 @@ SOURCES={
  'asm':('/markets/equity/EQReports/additional_surveillance_measure.aspx','Additional surveillance measures'),
  'gsm':('/markets/equity/EQReports/graded_surveil_measure.aspx','Graded surveillance measures'),
  'shareholding':('/corporates/Sharehold_Searchnew.aspx','Shareholding patterns'),
- 'pledges':('/corporates/Pledge_new.aspx','Pledged shares'),
+ 'pledges':('/corporates/pledge_new','Pledged shares'),
  'calendar':('/static/markets/marketinfo/listholi.aspx','Trading holidays'),
  'high_low':('/markets/equity/EQReports/HighLow?Flag=H','52-week high/low'),
  'breadth':('/markets/Equity/EQReports/Tradinghighlights_histroical.aspx','Breadth/circuit statistics'),
@@ -94,19 +94,48 @@ def browser_json(page,url,dest,name):
  if x['status']!=200 or not official(x['url']):raise ValueError('Unexpected API response '+str(x['status']))
  b=x['text'].encode();meta=write_blob(dest,name+'.json',b)
  return safe_json_bytes(b),dict(url=url,retrieved_at=now(),http_status=x['status'],**meta)
+def announcement_json(page,url,dest,name):
+ response=page.context.request.get(url,headers={'Origin':'https://www.bseindia.com','Referer':'https://bseindia.com'},timeout=90000)
+ body=response.body();meta=write_blob(dest,name+'.json',body)
+ if response.status!=200 or not official(response.url):raise ValueError('Announcement HTTP/source validation failed: '+str(response.status))
+ obj=safe_json_bytes(body)
+ if not isinstance(obj,dict) or 'Table' not in obj:raise ValueError('Announcement response missing Table; empty object is not zero records')
+ return obj,dict(url=url,retrieved_at=now(),http_status=response.status,**meta)
+
+def pledge_csv(page,target,dest,result):
+ # Official visible export; no manually generated pledge JSON request.
+ control=page.locator("main a:has-text('CSV'),main button:has-text('CSV'),main [title*='Download'],main [aria-label*='Download'],main a:has(img[alt*='Download'])").filter(visible=True)
+ control.first.wait_for(state='visible',timeout=60000)
+ if control.count()!=1:raise ValueError('Pledge CSV export control missing or ambiguous')
+ with page.expect_download(timeout=90000) as pending:control.click()
+ download=pending.value
+ if download.failure():raise ValueError('Pledge download failed: '+str(download.failure()))
+ name='pledges_official.csv';download.save_as(dest/name);body=(dest/name).read_bytes()
+ if not body or body.lstrip().startswith(b'<'):raise ValueError('Pledge export empty or HTML')
+ text,encoding=decode_reference(body);reader=csv.DictReader(io.StringIO(text));rows=list(reader)
+ fields=reader.fieldnames or [];norm={re.sub(r'[^a-z0-9]','',f.lower()):f for f in fields}
+ code=next((norm[x] for x in ['scripcode','securitycode','companycode'] if x in norm),None)
+ pledged=[f for f in fields if 'pledg' in f.lower()]
+ if not code or not pledged:raise ValueError('Pledge CSV schema missing security code or pledged holding columns: '+str(fields))
+ require_rows(rows,[code]+pledged)
+ if any(not re.fullmatch(r'\d{6}',str(r[code]).strip()) for r in rows):raise ValueError('Invalid pledge security identifier')
+ result['downloads']=[dict(file=name,**fingerprint(body),suggested_filename=download.suggested_filename,source_url=page.url,download_url=download.url,encoding=encoding)]
+ result['exports']=[export_rows(dest,'pledges_csv_records',rows,[code]+pledged,page.url,'Official consolidated CSV snapshot; reporting periods and current as-on date are not historical reconstruction')]
+ result.update(status='VALIDATED_SNAPSHOT',coverage='Official CSV export; current snapshot, not proof of complete historical coverage for requested date',source_asof_text=page.locator('main').inner_text()[:4000],historical_asof_verified=False)
+
 def announcement_pages(page,target,dest,responses,result):
  rec,_=matched(responses,dest,'AnnSubCategoryGetData')
  start=result.get('requested_from_date',target)
  d=target.replace('-','');url=query_url(rec['url'],pageno=1,strPrevDate=start.replace('-',''),strToDate=d)
- obj,meta=browser_json(page,url,dest,'ann_page_001');result['requests']=[meta]
+ obj,meta=announcement_json(page,url,dest,'ann_page_001');result['requests']=[meta]
  rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
  expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows);allrows=list(rows)
  if expected>50000:raise ValueError('Announcement count exceeds explicit safety bound')
  for n in range(2,(expected+size-1)//size+1):
-  obj,m=browser_json(page,query_url(url,pageno=n),dest,'ann_page_%03d'%n);result['requests'].append(m)
+  obj,m=announcement_json(page,query_url(url,pageno=n),dest,'ann_page_%03d'%n);result['requests'].append(m)
   allrows.extend(require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT']))
  # Do not call a moving, offset-paginated feed complete without a stability check.
- check,m=browser_json(page,url,dest,'ann_page_001_recheck');result['requests'].append(m)
+ check,m=announcement_json(page,url,dest,'ann_page_001_recheck');result['requests'].append(m)
  ids=[str(x['NEWSID']) for x in allrows]
  stable=int(check['Table1'][0]['ROWCNT'])==expected and [x['NEWSID'] for x in check['Table']]==[x['NEWSID'] for x in rows]
  unique=len(ids)==len(set(ids))
@@ -236,19 +265,7 @@ def extract_reference_files(dest,files):
 def adapt(context,page,key,target,dest,responses,result):
  result['exports']=[]
  if key=='announcements':announcement_pages(page,target,dest,responses,result);return
- if key=='pledges':
-  # The current official page does not always issue the report on initial load.
-  # Submit its real defaults once, rather than inventing empty API filters.
-  result['pledge_form_before_submit']=snapshot_page(page)['inputs']
-  try:
-   _,observed=matched(responses,dest,'GetCorpPledgeShareholding_ng')
-   require_rows(observed.get('Table') if isinstance(observed,dict) else observed,['ScripCode','Noofsharespledged'])
-   result['pledge_acquisition']='Reused valid initial-page response; no duplicate Submit/request'
-  except ValueError:
-   with page.expect_response(lambda r: 'GetCorpPledgeShareholding_ng' in r.url and official(r.url), timeout=90_000):
-    submit(page)
-   settled(page)
-   result['pledge_acquisition']='Official page Submit once; captured response; no download retry'
+ if key=='pledges':pledge_csv(page,target,dest,result);return
  if key=='security_master':
   page.locator('#ddlsegment').select_option('Equity');page.locator('#ddlstatus').select_option(label='Active');submit(page)
  if key in ['delivery','high_low']:
@@ -528,7 +545,7 @@ def main():
   try:
    context=browser.new_context(accept_downloads=True)
    # Ordinary browser bootstrap only; no evasion or repeated challenge attempts.
-   home=context.new_page();r=home.goto(ROOT,wait_until='domcontentloaded',timeout=40_000);body=home.locator('body').inner_text()
+   home=context.new_page();r=home.goto('https://bseindia.com',wait_until='domcontentloaded',timeout=40_000);body=home.locator('body').inner_text()
    if (r and r.status in [401,403,429]) or page_blocked(body):
     results=[{'dataset':n,'status':'ACCESS_BLOCKED','error':'BSE home denied access; no source retries','requested_report_date':target} for n in names]
    else:
@@ -544,5 +561,6 @@ def main():
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
  return 0 if status=='COMPLETE' else 2
 if __name__=='__main__':sys.exit(main())
+
 
 
