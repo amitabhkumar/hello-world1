@@ -161,10 +161,10 @@ def pledge_with_reloads(page,target,dest,result):
    except Exception as e:result.setdefault('diagnostic_errors',[]).append(str(e))
  return bounded_attempt(attempt,3,page,history,'pledge_page_and_export')
 
-def announcement_ui_response(page,target,start,dest,result,n,label):
+def announcement_ui_response(page,target,start,dest,result,n,label,backward=False):
  """One genuine UI action, one response; never manufacture a pagination URL."""
  from urllib.parse import parse_qs
- controls=page.locator('#idnext').filter(visible=True) if n!=1 else page.get_by_role('button',name='Submit',exact=True)
+ controls=page.get_by_text('Prev',exact=True).filter(visible=True) if backward else page.locator('#idnext').filter(visible=True) if n!=1 else page.get_by_role('button',name='Submit',exact=True)
  if not controls.count():raise ValueError('Required announcement UI control unavailable')
  write_blob(dest,label+'_before_dom.json',json.dumps(snapshot_page(page),ensure_ascii=False).encode())
  def matches(response):
@@ -190,7 +190,7 @@ def announcement_pages(page,target,dest,responses,result):
  result['requests']=[]
  result['retry_policy']='NONE; genuine UI Submit/Next clicks only; no synthetic pagination requests'
  result['pagination_control']='Observed current BSE UI #idnext Next; advances each page including 6/11/16/21'
- def fetch(n,label):return announcement_ui_response(page,target,start,dest,result,n,label)
+ def fetch(n,label):return announcement_ui_response(page,target,start,dest,result,n,label,backward=label.startswith('ann_recheck'))
  obj=fetch(1,'ann_page_001');rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
  expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows)
  if expected<1 or expected>50000:raise ValueError('Announcement count outside explicit safety bound')
@@ -211,7 +211,11 @@ def announcement_pages(page,target,dest,responses,result):
   obj=fetch(n,'ann_page_%03d'%n)
   if int(obj['Table1'][0]['ROWCNT'])!=expected:raise ValueError('Announcement ROWCNT changed during pagination')
   add(require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT']))
- check=fetch(1,'ann_page_001_recheck')
+ check=obj
+ for n in range((expected+size-1)//size-1,0,-1):
+  check=fetch(n,'ann_recheck_%03d'%n)
+ if (expected+size-1)//size==1:
+  check=fetch(1,'ann_page_001_recheck')
  stable=int(check['Table1'][0]['ROWCNT'])==expected and [x['NEWSID'] for x in check['Table']]==[x['NEWSID'] for x in rows]
  allrows=list(unique.values());dates_ok=all(start<=str(x['NEWS_DT'])[:10]<=target for x in allrows)
  result.update(pagination_stable=stable,unique_ids=True,record_dates_match=dates_ok)

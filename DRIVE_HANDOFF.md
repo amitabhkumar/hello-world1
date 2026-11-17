@@ -21,5 +21,5 @@ remains in drive_sync_receipt.json in the GitHub artifact. No automatic retry lo
 Announcement repair: the current BSE UI exposes #idnext (Next), not a numbered
 1–5 window. Real Submit/Next clicks are captured using expect_response, including
 page 6 and subsequent boundaries; no synthetic fetch URL or retry is used.
-A fresh Submit performs the Page 1 stability check. Raw responses and before/after
+Visible Prev clicks return to Page 1 for its stability check (Submit on the final page was observed to request the old page number). Raw responses and before/after
 DOM snapshots are preserved. Historical HTTP 400 remains a historical failure.
