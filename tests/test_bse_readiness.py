@@ -36,10 +36,20 @@ class ReadinessTests(unittest.TestCase):
             self.assertIn('MarketWatch',(Path(d)/'navigation_state.json').read_text())
 
 class PledgeRequestTests(unittest.TestCase):
-    def test_real_submit_before_parsing_no_empty_filter_fallback(self):
-        import inspect
-        from titan.bse_data import adapt
-        code=inspect.getsource(adapt)
-        self.assertIn('page.expect_response',code)
-        self.assertLess(code.index("if key=='pledges'"),code.index('relevant='))
-        self.assertNotIn('PledgeRange=&DeriTrade=',code)
+    def test_official_download_and_invalid_exports(self):
+        from unittest.mock import MagicMock
+        from titan.bse_data import pledge_csv
+        page=MagicMock();page.url='https://www.bseindia.com/corporates/pledge_new'
+        page.locator.return_value.filter.return_value.count.return_value=1
+        dl=page.expect_download.return_value.__enter__.return_value.value
+        dl.failure.return_value=None;dl.url='blob:https://www.bseindia.com/test';dl.suggested_filename='pledge.csv'
+        for body,valid in [(b'Security Code,Pledged Shares\n500001,10\n',True),(b'',False),(b'<html>error',False),(b'Security Code,Pledged Shares\n',False),(b'Name,Value\nA,1',False)]:
+            with self.subTest(body=body),tempfile.TemporaryDirectory() as d:
+                dl.save_as.side_effect=lambda dest,b=body:Path(dest).write_bytes(b)
+                if valid:
+                    result={};pledge_csv(page,'2026-11-16',Path(d),result)
+                    self.assertEqual(result['exports'][0]['rows'],1)
+                    self.assertFalse(result['historical_asof_verified'])
+                else:
+                    with self.assertRaises(ValueError):pledge_csv(page,'2026-11-16',Path(d),{})
+        page.expect_download.assert_called()
