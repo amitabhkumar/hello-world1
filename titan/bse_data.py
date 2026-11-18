@@ -190,7 +190,10 @@ def announcement_pages(page,target,dest,responses,result):
  result['requests']=[]
  result['retry_policy']='NONE; genuine UI Submit/Next clicks only; no synthetic pagination requests'
  result['pagination_control']='Observed current BSE UI #idnext Next; advances each page including 6/11/16/21'
- def fetch(n,label):return announcement_ui_response(page,target,start,dest,result,n,label,backward=label.startswith('ann_recheck'))
+ def fetch(n,label):
+  backward=label.startswith('ann_recheck')
+  if n!=1 or backward:page.wait_for_timeout(1800)
+  return announcement_ui_response(page,target,start,dest,result,n,label,backward=backward)
  obj=fetch(1,'ann_page_001');rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
  expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows)
  if expected<1 or expected>50000:raise ValueError('Announcement count outside explicit safety bound')
