@@ -25,7 +25,7 @@ class AnnouncementPacingTests(unittest.TestCase):
   self.assertEqual(trace[0],('click','Submit',1))
   self.assertEqual(len(trace),85) # 1 Submit + 42 (pause, Next/Prev) pairs
   for i in range(1,len(trace),2):
-   self.assertEqual(trace[i],('pause',850));self.assertIn(trace[i+1][1],('Next','Prev'))
+   self.assertEqual(trace[i],('pause',1800));self.assertIn(trace[i+1][1],('Next','Prev'))
   self.assertEqual(trace[-1],('click','Prev',1))
   self.assertEqual(result['captured_unique_rows'],1073)
   self.assertTrue(result['pagination_stable'])

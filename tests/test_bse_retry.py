@@ -34,7 +34,7 @@ class RetryTests(unittest.TestCase):
  def test_full_count_paced(self):
   p,r=self.run_pages([self.obj(['a','b']),self.obj(['c']),self.obj(['a','b'])])
   self.assertEqual(r['captured_unique_rows'],3);self.assertEqual(r['status'],'VALIDATED_DATED_RECORDS')
-  self.assertTrue(all(x.args[0]==850 for x in p.wait_for_timeout.call_args_list))
+  self.assertTrue(all(x.args[0]==1800 for x in p.wait_for_timeout.call_args_list))
  def test_duplicates_deduplicated(self):
   _,r=self.run_pages([self.obj(['a','b']),self.obj(['b','c']),self.obj(['a','b'])])
   self.assertEqual(r['captured_unique_rows'],3);self.assertEqual(r['duplicate_records'],1)
