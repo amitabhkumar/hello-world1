@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       report_date:
-        description: 'Exact report date YYYY-MM-DD; blank selects eligible session using official calendar'
+        description: 'Exact report date YYYY-MM-DD; blank selects previous eligible session in the morning, with exact-date inventory validation'
         type: string
         required: false
   push:
@@ -61,6 +61,17 @@ jobs:
           else
             python3 -m titan.drive_sync --root nse-output
           fi
+      - name: Deliver and verify via Drive OAuth
+        if: always()
+        continue-on-error: true
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_INCOMING_FOLDER_ID: ${{ secrets.GDRIVE_INCOMING_FOLDER_ID }}
+        uses: ./.github/actions/drive-oauth
+        with:
+          root: nse-output
       - name: Preserve successful files and all failures
         if: always()
         uses: actions/upload-artifact@v4

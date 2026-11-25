@@ -3,6 +3,8 @@ No fingerprint masking, proxy rotation, credential access or challenge bypass.
 A captured page is not a validated dataset. Failures remain separately visible.
 """
 import argparse, csv, hashlib, io, json, os, re, sys, zipfile
+from contextlib import contextmanager
+from time import perf_counter_ns
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from urllib.parse import urlparse, unquote
@@ -10,6 +12,23 @@ from zoneinfo import ZoneInfo
 IST=ZoneInfo('Asia/Kolkata')
 ROOT='https://www.bseindia.com'
 MAX_BYTES=50_000_000
+BSE_PACING_MS = int(os.environ.get("BSE_PACING_MS", "1800"))
+
+
+@contextmanager
+def timed(result, stage, **fields):
+ entry = dict(stage=stage, **fields)
+ start = perf_counter_ns()
+ try:
+  yield
+ except Exception as error:
+  entry["error"] = str(error)
+  raise
+ finally:
+  entry["elapsed_ms"] = (perf_counter_ns() - start) / 1_000_000
+  result.setdefault("timings", []).append(entry)
+
+
 SOURCES={
  'announcements':('/corporates/ann.html','Corporate announcements/results/orders'),
  'delivery':('/markets/equity/EQReports/GrossShortPos?expandable=3&flag=0','Gross delivery download; actual page and file scope validated at runtime'),
@@ -103,12 +122,18 @@ def announcement_json(page,url,dest,name):
 def pledge_csv(page,target,dest,result):
  # Official visible export; no manually generated pledge JSON request.
  control=page.locator("main a:has-text('CSV'),main button:has-text('CSV'),main [title*='Download'],main [aria-label*='Download'],main a:has(img[alt*='Download'])").filter(visible=True)
- control.first.wait_for(state='visible',timeout=30000)
+ with timed(result,'export_control_detection'):
+  control.first.wait_for(state='visible',timeout=30000)
  if control.count()!=1:raise ValueError('Pledge CSV export control missing or ambiguous')
- with page.expect_download(timeout=90000) as pending:control.click()
- download=pending.value
- if download.failure():raise ValueError('Pledge download failed: '+str(download.failure()))
- name='pledges_official.csv';download.save_as(dest/name);body=(dest/name).read_bytes()
+ with timed(result,'download_event'):
+  with page.expect_download(timeout=90000) as pending:
+   with timed(result,'export_click'):
+    control.click()
+ with timed(result,'download_completion'):
+  download=pending.value
+  failure=download.failure()
+  if failure:raise ValueError('Pledge download failed: '+str(failure))
+  name='pledges_official.csv';download.save_as(dest/name);body=(dest/name).read_bytes()
  if not body or body.lstrip().startswith(b'<'):raise ValueError('Pledge export empty or HTML')
  text,encoding=decode_reference(body);reader=csv.DictReader(io.StringIO(text));rows=list(reader)
  fields=reader.fieldnames or [];norm={re.sub(r'[^a-z0-9]','',f.lower()):f for f in fields}
@@ -155,10 +180,14 @@ def pledge_with_reloads(page,target,dest,result):
   if response and response.status>=500:raise RuntimeError('Pledge response '+str(response.status))
   try:
    if page_blocked(page.locator('body').inner_text(timeout=10000)):raise PermissionError('Pledge page access challenge')
-   pledge_csv(page,target,dest,result)
+   with timed(result,'consolidated_pledge_csv_path'):
+    pledge_csv(page,target,dest,result)
   finally:
    try:(dest/('page_attempt_%02d.json'%n)).write_text(json.dumps(snapshot_page(page),indent=2))
    except Exception as e:result.setdefault('diagnostic_errors',[]).append(str(e))
+ if os.getenv('BSE_DIAGNOSTIC_SINGLE_PASS')=='1':
+  result['retry_policy']='NONE; diagnostic run'
+  return attempt(1)
  return bounded_attempt(attempt,3,page,history,'pledge_page_and_export')
 
 def announcement_ui_response(page,target,start,dest,result,n,label,backward=False):
@@ -173,7 +202,8 @@ def announcement_ui_response(page,target,start,dest,result,n,label,backward=Fals
   return q.get('pageno')==[str(n)] and q.get('strPrevDate')==[start.replace('-','')] and q.get('strToDate')==[target.replace('-','')]
  try:
   with page.expect_response(matches,timeout=90000) as event:
-   controls.first.click()
+   with timed(result,'pagination_click' if backward or n>1 else 'submit_click',page=n,label=label):
+    controls.first.click()
   response=event.value;body=response.body()
   meta=dict(url=response.url,http_status=response.status,retrieved_at=now(),**write_blob(dest,label+'.json',body))
   result['requests'].append(meta)
@@ -192,8 +222,10 @@ def announcement_pages(page,target,dest,responses,result):
  result['pagination_control']='Observed current BSE UI #idnext Next; advances each page including 6/11/16/21'
  def fetch(n,label):
   backward=label.startswith('ann_recheck')
-  if n!=1 or backward:page.wait_for_timeout(1800)
-  return announcement_ui_response(page,target,start,dest,result,n,label,backward=backward)
+  if n!=1 or backward:page.wait_for_timeout(BSE_PACING_MS)
+  stage='page_1_stability_recheck' if n==1 and 'recheck' in label else 'pagination_response' if backward or n>1 else 'first_announcements_response'
+  with timed(result,stage,page=n,label=label):
+   return announcement_ui_response(page,target,start,dest,result,n,label,backward=backward)
  obj=fetch(1,'ann_page_001');rows=require_rows(obj.get('Table'),['NEWSID','SCRIP_CD','NEWS_DT'])
  expected=int(obj['Table1'][0]['ROWCNT']);size=len(rows)
  if expected<1 or expected>50000:raise ValueError('Announcement count outside explicit safety bound')
@@ -541,10 +573,11 @@ def collect_one(context,key,target,out,from_date=None):
   if not official(r.url) or result.get('_detail_capture_active'):return
   if r.status in [401,403,429]:blocks.append({'url':r.url,'status':r.status})
   ct=r.headers.get('content-type','').lower()
-  if ('json' in ct or 'xml' in ct or 'csv' in ct):
+  if (r.status>=400 and r.request.resource_type in ('fetch','xhr')) or ('json' in ct or 'xml' in ct or 'csv' in ct):
    rec={'url':r.url,'method':r.request.method,'http_status':r.status,'content_type':ct,'retrieved_at':now()}
    try:
     body=r.body();ext='json' if 'json' in ct else 'xml' if 'xml' in ct else 'csv'
+    rec['body_prefix']=body.decode('utf-8',errors='replace')[:200]
     rec.update(write_blob(dest,f'response_{len(responses):03}.{ext}',body))
     if ext=='json':
      obj=safe_json_bytes(body);rec['arrays']=[{'path':p,'rows':len(rows),'keys':sorted(set().union(*(r.keys() for r in rows)))[:100]} for p,rows in row_arrays(obj)]
@@ -556,7 +589,8 @@ def collect_one(context,key,target,out,from_date=None):
   if key=='pledges':
    pledge_with_reloads(page,target,dest,result)
    return result
-  main=page.goto(ROOT+path,wait_until='domcontentloaded',timeout=40_000)
+  with timed(result,'initial_page_load',dataset=key):
+   main=page.goto(ROOT+path,wait_until='domcontentloaded',timeout=40_000)
   page.wait_for_timeout(1500)
   text=page.locator('body').inner_text(timeout=10_000)
   if (main and main.status in [401,403,429]) or page_blocked(text):
@@ -627,14 +661,15 @@ def main():
  names=[n for n in names if n not in ['price_bands','shareholding']]+[n for n in ['price_bands','shareholding'] if n in names]
  import time
  os.environ['BSE_RUN_DEADLINE_MONOTONIC']=str(time.monotonic()+2700)
- started=now();results=[]
+ started=now();results=[];bootstrap={}
  from playwright.sync_api import sync_playwright
  with sync_playwright() as pw:
   browser=pw.chromium.launch(headless=False)
   try:
    context=browser.new_context(accept_downloads=True)
    # Ordinary browser bootstrap only; no evasion or repeated challenge attempts.
-   home=context.new_page();r=home.goto('https://bseindia.com',wait_until='domcontentloaded',timeout=40_000);body=home.locator('body').inner_text()
+   with timed(bootstrap,'context_warm_up'):
+    home=context.new_page();r=home.goto('https://bseindia.com',wait_until='domcontentloaded',timeout=40_000);body=home.locator('body').inner_text()
    if (r and r.status in [401,403,429]) or page_blocked(body):
     results=[{'dataset':n,'status':'ACCESS_BLOCKED','error':'BSE home denied access; no source retries','requested_report_date':target} for n in names]
    else:
@@ -645,6 +680,15 @@ def main():
   except Exception as e:
    seen={x['dataset'] for x in results};results += [{'dataset':n,'status':'FAILED','error':str(e)} for n in names if n not in seen]
   finally:browser.close()
+ diagnostics=dict(timings=bootstrap.get('timings',[]),http=[],network_failures=[])
+ for result in results:
+  dataset=result['dataset']
+  diagnostics['timings'].extend(dict(t,dataset=dataset) for t in result.get('timings',[]))
+  for response in result.get('responses',[]):
+   diagnostics['http'].append({**{k:response.get(k) for k in ('http_status','content_type','body_prefix','capture_error')},'dataset':dataset,'path':urlparse(response['url']).path})
+  for failure in result.get('network_failures',[]):
+   diagnostics['network_failures'].append(dict(dataset=dataset,path=urlparse(failure['url']).path,http_status=None,content_type=None,body_prefix=None,error=failure['failure']))
+ (args.output/'timing_diagnostics.json').write_text(json.dumps(diagnostics,indent=2))
  status='COMPLETE' if results and all(x['status'] in ['VALIDATED_DATED_RECORDS','VALIDATED_SNAPSHOT','VALIDATED_DOWNLOAD','NOT_APPLICABLE'] for x in results) else 'PARTIAL'
  manifest={'schema_version':2,'date_plan':date_plan,'started_at':started,'finished_at':now(),'requested_report_date':target,'mode':'Public BSE source acquisition; page captures are explicitly unvalidated','status':status,'github_run_id':os.getenv('GITHUB_RUN_ID'),'github_run_attempt':os.getenv('GITHUB_RUN_ATTEMPT'),'commit':os.getenv('GITHUB_SHA'),'datasets':results,'drive_status':'NOT_TRANSFERRED'}
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))

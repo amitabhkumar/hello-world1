@@ -21,6 +21,19 @@ artifact = os.environ.get('NSE_ARTIFACT_DIR')
 m=json.loads((Path(artifact)/'manifest.json').read_text()) if artifact else {'datasets':[]}
 for f in m['datasets']:
  got=d.validate(Path(artifact,f['filename']).read_bytes(),f['filename']);assert all(got[k]==f[k] for k in ['rows','bytes','sha256'])
-results.append(dict(test='All six real CSV schemas and hashes',passed=True))
+if artifact:results.append(dict(test='Supplied artifact CSV schemas and hashes',passed=True))
 print(json.dumps(results,indent=2))
 print(len(results),'tests passed')
+
+import unittest
+
+
+class MorningEligibility(unittest.TestCase):
+ def test_morning_after_holiday_requires_exact_prior_session(self):
+  at=datetime.fromisoformat("2026-11-25T08:30:00+05:30")
+  day,status=d.select_date(at)
+  self.assertEqual((str(day),status),("2026-11-23","ELIGIBLE_FOR_SINGLE_ATTEMPT"))
+
+ def test_missing_adjacent_year_fails_closed(self):
+  with self.assertRaisesRegex(ValueError,"CALENDAR_COVERAGE_MISSING"):
+   d.select_date(datetime.fromisoformat("2026-01-01T08:30:00+05:30"))

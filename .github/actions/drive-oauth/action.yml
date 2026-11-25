@@ -1,0 +1,36 @@
+name: Verified Drive OAuth upload
+description: Deliver manifest-validated files or one self-test file
+inputs:
+  root:
+    description: Collector output directory
+    required: true
+  selftest:
+    description: Generate a timestamped self-test
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        OUTPUT_ROOT: ${{ inputs.root }}
+        SELFTEST: ${{ inputs.selftest }}
+      run: |
+        for key in GDRIVE_CLIENT_ID GDRIVE_CLIENT_SECRET GDRIVE_REFRESH_TOKEN GDRIVE_INCOMING_FOLDER_ID; do
+          if [[ -z "${!key:-}" ]]; then
+            echo 'DRIVE_STATUS=NOT_CONFIGURED' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+        done
+        args=(--root "$OUTPUT_ROOT")
+        if [[ "$SELFTEST" == true ]]; then
+          mkdir -p "$OUTPUT_ROOT"
+          file="$OUTPUT_ROOT/oauth_selftest_$(date -u +%Y%m%dT%H%M%S%NZ).txt"
+          echo "TITAN OAuth self-test $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$file"
+          args+=(--file "$file")
+        fi
+        if python3 -m titan.drive_sync_oauth "${args[@]}"; then
+          echo 'DRIVE_STATUS=VERIFIED' >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo 'DRIVE_STATUS=FAILED' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi

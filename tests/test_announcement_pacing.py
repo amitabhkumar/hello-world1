@@ -29,6 +29,10 @@ class AnnouncementPacingTests(unittest.TestCase):
   self.assertEqual(trace[-1],('click','Prev',1))
   self.assertEqual(result['captured_unique_rows'],1073)
   self.assertTrue(result['pagination_stable'])
+ def test_env_override(self):
+  import os, subprocess, sys
+  result=subprocess.check_output([sys.executable,'-c','from titan.bse_data import BSE_PACING_MS;print(BSE_PACING_MS)'],env={**os.environ,'BSE_PACING_MS':'2410'},text=True)
+  self.assertEqual(result.strip(),'2410')
  def test_single_page_submit_recheck_has_no_navigation_pause(self):
   trace,result=self.exercise(1)
   self.assertEqual(trace,[('click','Submit',1),('click','Submit',1)])

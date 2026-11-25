@@ -1,0 +1,24 @@
+name: Drive OAuth self-test
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deliver and verify via Drive OAuth
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_INCOMING_FOLDER_ID: ${{ secrets.GDRIVE_INCOMING_FOLDER_ID }}
+        uses: ./.github/actions/drive-oauth
+        with:
+          root: selftest
+          selftest: "true"
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('selftest/oauth/drive_sync_receipt.json') != ''
+        with:
+          name: drive-oauth-selftest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: selftest/oauth/drive_sync_receipt.json
