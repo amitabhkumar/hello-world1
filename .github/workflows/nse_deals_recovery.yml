@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           cat > /tmp/deals.py <<'PY'
-          import csv, io, json, hashlib, os, pathlib, datetime, sys
+          import csv, io, json, hashlib, os, pathlib, datetime, sys, time
           from decimal import Decimal
           from nse_automation.download import select_date, IST, CALENDAR_SOURCES
           from urllib.parse import urlencode
@@ -65,7 +65,17 @@ jobs:
            try:
             page.goto("https://www.nseindia.com/all-reports",wait_until="domcontentloaded",timeout=60000)
             page.goto("https://www.nseindia.com/report-detail/display-bulk-and-block-deals",wait_until="domcontentloaded",timeout=60000)
-            page.locator("#HistBulkBlockDeals-download").wait_for(state="attached",timeout=30000)
+            selector="#HistBulkBlockDeals-download"
+            def dom_state():
+             try:
+              return page.evaluate("""s => ({url:location.href,ready:document.readyState,title:document.title,matches:document.querySelectorAll(s).length,tables:[...document.querySelectorAll('table')].map(t=>({id:t.id,rows:t.rows.length,text:t.innerText.slice(0,200)}))})""",selector)
+             except Exception as err:return {"diagnostic_error":str(err)}
+            wait=manifest["download_control_wait"]={"selector":selector,"before":dom_state()}
+            start=time.perf_counter_ns()
+            try:page.locator(selector).wait_for(state="attached",timeout=30000)
+            finally:
+             wait["elapsed_ms"]=(time.perf_counter_ns()-start)/1_000_000
+             wait["after"]=dom_state()
             js=context.request.get("https://www.nseindia.com/dist/js/sections/bulk-block-deals-short-selling.js",timeout=30000)
             source=js.body();(out/"official_route.js").write_bytes(source)
             if b"/api/historicalOR/bulk-block-short-deals" not in source:raise ValueError("Current official route not confirmed")
@@ -84,10 +94,12 @@ jobs:
               if not header_required.issubset({k.strip() for k in r["fields"]}):raise ValueError("Missing required deal columns")
               if not rows:
                r.update(status="EMPTY_SCHEMA_VALID_UNCONFIRMED",error="Header-only export; no-deal status not independently confirmed")
+               r["empty_csv_state"]={"dom":dom_state(),"content_type":response.headers.get("content-type"),"body_prefix":text[:200]}
                confirmation_url=url.rsplit("&csv=true",1)[0]
                confirmation=context.request.get(confirmation_url,timeout=60000)
                evidence=confirmation.body();evidence_name=kind+"_"+day.strftime("%d%m%Y")+"_table.json";(out/evidence_name).write_bytes(evidence)
                r["table_confirmation"]={"url":confirmation_url,"http_status":confirmation.status,"file":evidence_name,"bytes":len(evidence),"sha256":hashlib.sha256(evidence).hexdigest(),"retrieved_at":datetime.datetime.now(IST).isoformat()}
+               r["table_confirmation"].update(content_type=confirmation.headers.get("content-type"),body_prefix=evidence.decode("utf-8",errors="replace")[:200])
                obj=json.loads(evidence.decode("utf-8-sig")) if confirmation.status==200 else None
                if isinstance(obj,dict) and obj.get("data")==[] and not obj.get("error") and not obj.get("showMessage"):
                 r.update(status="CONFIRMED_EMPTY_DATE_EXPORT",error=None,source_dates=[],coverage="CSV header and official table both report zero records for exact requested date; not a guarantee against later exchange revisions")
