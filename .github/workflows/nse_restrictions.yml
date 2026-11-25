@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       report_date:
-        description: 'Exact report date YYYY-MM-DD; blank selects eligible session using official calendar'
+        description: 'Exact report date YYYY-MM-DD; blank selects previous eligible session in the morning, with exact-date inventory validation'
         type: string
         required: false
   push:

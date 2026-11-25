@@ -32,7 +32,13 @@ def select_date(now, explicit=None):
         d = date.fromisoformat(explicit)
         if d > today or not is_session(d):
             raise ValueError("Requested date is future or not an eligible equity session")
-    elif is_session(today) and now.time() >= time(16, 0):
+    elif now.time() < time(16, 0):
+        # Morning targets only the latest completed eligible session, with no EOD clock gate.
+        d = today - timedelta(days=1)
+        while not is_session(d):
+            d -= timedelta(days=1)
+        return d, "ELIGIBLE_FOR_SINGLE_ATTEMPT"
+    elif is_session(today):
         d = today  # 16:30 records today's pending publication, never yesterday as final.
     else:
         d = today - timedelta(days=1) if is_session(today) else today
@@ -220,7 +226,8 @@ def main():
     exitcode=1
     try:
         target, publication_status = select_date(now, args.date)
-        m.update(requested_date=target.isoformat(), publication_status=publication_status, publication_timestamp=None)
+        m.update(requested_date=target.isoformat(), report_date=target.isoformat(),
+                 publication_status=publication_status, publication_timestamp=None)
         if publication_status == "PENDING_PUBLICATION_WINDOW":
             m["status"]="PENDING_PUBLICATION_WINDOW"
             return 2
@@ -262,7 +269,8 @@ def main():
                 for name in required:
                     if name not in selected: m["datasets"].append(dict(filename=name,status="UNAVAILABLE",error="Exact dated file absent from loaded All Reports inventory; calendar/publication not inferred"))
                 for name in selected:
-                    item=dict(filename=name,file_date=filedate(name).isoformat(),status="STARTED",
+                    item=dict(filename=name,file_date=filedate(name).isoformat(),report_date=target.isoformat(),
+                              publication_timestamp=None,status="STARTED",
                               scope="future-dated separate reference" if filedate(name)>target else "requested-date snapshot",
                               effective_date="UNVERIFIED",source_page=PAGE)
                     m["datasets"].append(item)
