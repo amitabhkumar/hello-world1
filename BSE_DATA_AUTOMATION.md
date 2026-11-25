@@ -93,3 +93,11 @@ Announcements retain previous-eligible-session overlap on default runs. Exact-da
 Pledges use the official visible Consolidated Pledge CSV control and Playwright expect_download. Nonempty bytes, security identifiers, pledge columns and positive record count are required. The raw download and normalized records are preserved with SHA256. The current snapshot as-on text is retained separately from requested report date; this does not reconstruct historical pledge holdings. A missing/ambiguous export control or invalid download fails explicitly without JSON fallback or retry loops.
 
 Implementation commit 3d73d31bce30b2097b74c5c54880ff60d1374c4a; targeted live acceptance is recorded separately in project receipts. Initial run43997849237 failed before acquisition because an obsolete test asserted the retired JSON implementation. It is preserved; behavioral CSV tests replaced that assertion. No NSE, Bhavcopy source or cron definitions changed.
+
+## 25 November 2026 — Section 6 delivery note
+
+Full BSE archives over 100 MB exceed the ChatGPT Drive connector transfer cap.
+For chat delivery, preserve the original archive and transfer a validated compact
+subset with a receipt identifying its scope. The direct runner-to-Drive OAuth
+path bypasses that connector and its 100 MB limit. Operational acceptance
+requires a real self-test receipt verifying the downloaded bytes and parent.
