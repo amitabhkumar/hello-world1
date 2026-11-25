@@ -576,7 +576,9 @@ def collect_one(context,key,target,out,from_date=None):
   if (r.status>=400 and r.request.resource_type in ('fetch','xhr')) or ('json' in ct or 'xml' in ct or 'csv' in ct):
    rec={'url':r.url,'method':r.request.method,'http_status':r.status,'content_type':ct,'retrieved_at':now()}
    try:
-    body=r.body();ext='json' if 'json' in ct else 'xml' if 'xml' in ct else 'csv'
+    body=r.body()
+    if r.request.method=='POST' and not body and r.status in (200,202):return
+    ext='json' if 'json' in ct else 'xml' if 'xml' in ct else 'csv'
     rec['body_prefix']=body.decode('utf-8',errors='replace')[:200]
     rec.update(write_blob(dest,f'response_{len(responses):03}.{ext}',body))
     if ext=='json':
@@ -694,8 +696,3 @@ def main():
  (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
  return 0 if status=='COMPLETE' else 2
 if __name__=='__main__':sys.exit(main())
-
-
-
-
-
