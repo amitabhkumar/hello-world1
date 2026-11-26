@@ -380,9 +380,20 @@ def extract_reference_files(dest,files):
 def adapt(context,page,key,target,dest,responses,result):
  result['exports']=[]
  if key=='announcements':
-  result['date_controls_filled']=fill_dates(page,target)
-  page.locator('#corporates-ann-from-date').fill(result.get('requested_from_date',target)[8:10]+'/'+result.get('requested_from_date',target)[5:7]+'/'+result.get('requested_from_date',target)[:4])
-  announcement_pages(page,target,dest,responses,result);return
+  def run_ann(attempt):
+   if attempt>1:
+    page.reload(wait_until='domcontentloaded',timeout=40_000)
+    page.wait_for_timeout(1500)
+    try:page.wait_for_load_state('networkidle',timeout=12_000)
+    except Exception:pass
+   result['date_controls_filled']=fill_dates(page,target)
+   from_input=page.locator('#corporates-ann-from-date')
+   from_input.fill(result.get('requested_from_date',target)[8:10]+'/'+result.get('requested_from_date',target)[5:7]+'/'+result.get('requested_from_date',target)[:4])
+   from_input.press('Tab')
+   announcement_pages(page,target,dest,responses,result)
+  if os.getenv('BSE_DIAGNOSTIC_SINGLE_PASS')=='1':
+   run_ann(1);return
+  bounded_attempt(run_ann,2,page,result.setdefault('attempt_history',[]),'announcements_page_and_submit');return
  if key=='pledges':pledge_csv(page,target,dest,result);return
  if key=='security_master':
   page.locator('#ddlsegment').select_option('Equity');page.locator('#ddlstatus').select_option(label='Active');submit(page)
