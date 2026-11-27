@@ -9,15 +9,18 @@ on:
   push:
     paths: ['.github/workflows/nse_deals_recovery.yml']
   schedule:
-    - cron: '0 3 * * 1-5'
-    - cron: '0 11 * * 1-5'
-    - cron: '30 16 * * *'
-    - cron: '30 2 * * 6'
+    # Buffered odd-minute schedules (IST): 20:49 daily (after 20:35 NSE window), 07:54 weekdays, 06:35 Saturday
+    - cron: '19 15 * * *'
+    - cron: '24 2 * * 1-5'
+    - cron: '5 1 * * 6'
+
 permissions:
   contents: read
+
 concurrency:
   group: nse-deals-recovery
   cancel-in-progress: false
+
 jobs:
   acquire:
     runs-on: ubuntu-latest
@@ -26,14 +29,17 @@ jobs:
       image: mcr.microsoft.com/playwright/python:v1.56.0-noble
     steps:
       - uses: actions/checkout@v4
+
       - name: Prepare isolated browser runtime
         run: |
           apt-get update
           apt-get install -y --no-install-recommends python3-venv
           python3 -m venv /tmp/deals-venv
           /tmp/deals-venv/bin/pip install playwright==1.56.0
+
       - name: Test date selection and validation
         run: PYTHONPATH=. /tmp/deals-venv/bin/python deals_checks/test_schedule.py
+
       - name: Fetch official CSV exports once
         env:
           REPORT_DATE: ${{ inputs.report_date }}
@@ -128,9 +134,10 @@ jobs:
             browser.close()
           print(json.dumps(manifest))
           if len(manifest["datasets"])!=2 or any(r["status"] not in ("VALIDATED_DATE_CSV","CONFIRMED_EMPTY_DATE_EXPORT") for r in manifest["datasets"]):raise SystemExit(1)
-          
+
           PY
           PYTHONPATH="$GITHUB_WORKSPACE" xvfb-run --auto-servernum /tmp/deals-venv/bin/python /tmp/deals.py
+
       - name: Optional verified Drive handoff
         if: always()
         continue-on-error: true
@@ -146,6 +153,7 @@ jobs:
           else
             python3 -m titan.drive_sync --root nse-deals-output
           fi
+
       - name: Deliver and verify via Drive OAuth
         if: always()
         continue-on-error: true
@@ -157,6 +165,7 @@ jobs:
         uses: ./.github/actions/drive-oauth
         with:
           root: nse-deals-output
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -164,4 +173,3 @@ jobs:
           path: nse-deals-output/
           retention-days: 90
           if-no-files-found: error
-
