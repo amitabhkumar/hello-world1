@@ -156,7 +156,6 @@ jobs:
 
       - name: Deliver and verify via Drive OAuth
         if: always()
-        continue-on-error: true
         env:
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
