@@ -21,12 +21,15 @@ on:
     - cron: '30 10 * * *'     # 16:00 IST Daily (Post-market: gated by calendar/special_sessions)
     - cron: '25 15 * * *'     # 20:55 IST Daily (Evening discovery: runs daily per SOP V3.0)
     - cron: '0 1 * * 6'       # 06:30 IST Sat   (Weekly refresh: shareholding, var_margin, calendar)
+
 permissions:
   contents: read
   actions: read
+
 concurrency:
   group: bse-supplementary-${{ github.ref }}
   cancel-in-progress: false
+
 jobs:
   acquire:
     runs-on: ubuntu-latest
@@ -175,7 +178,6 @@ jobs:
           key: bse-originals-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Deliver and verify via Drive OAuth
         if: always() && steps.gate.outputs.should_run == 'true'
-        continue-on-error: true
         env:
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
