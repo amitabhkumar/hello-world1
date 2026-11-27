@@ -154,16 +154,31 @@ def pledge_csv(page,target,dest,result):
  result.update(status='VALIDATED_SNAPSHOT',coverage='Official CSV export; current snapshot, not proof of complete historical coverage for requested date',source_asof_text=page.locator('main').inner_text()[:4000],historical_asof_verified=False)
 
 def pledge_json_fallback(page,dest,responses,result):
- try:
-  r,obj=matched(responses,dest,'GetCorpPledgeShareholding_ng')
-  src_url=r['url']
- except ValueError:
-  src_url='https://api.bseindia.com/BseIndiaAPI/api/GetCorpPledgeShareholding_ng/w?COMPANY=&Group=&Status=&Industryname=&PledgeRange=&DeriTrade='
-  obj,meta=browser_json(page,src_url,dest,'pledges_api_raw')
-  result.setdefault('requests',[]).append(meta)
+ csv_url='https://api.bseindia.com/BseIndiaAPI/api/DownloadPledgeCsv_ng/w?COMPANY=&Group=&Status=&Industryname=&PledgeRange=&DeriTrade='
+ x=page.evaluate("""async u => {const r=await fetch(u,{headers:{'Accept':'text/csv, */*'},signal:AbortSignal.timeout(45000)}); return {status:r.status,url:r.url,text:await r.text()};}""",csv_url)
+ if x['status']==200 and x['text'] and not x['text'].lstrip().startswith('<'):
+  body=x['text'].encode('utf-8-sig');name='pledges_official.csv';write_blob(dest,name,body)
+  text,encoding=decode_reference(body);reader=csv.DictReader(io.StringIO(text));rows=list(reader)
+  fields=reader.fieldnames or [];norm={re.sub(r'[^a-z0-9]','',f.lower()):f for f in fields}
+  code=next((norm[k] for k in ['scripcode','securitycode','companycode'] if k in norm),None)
+  company='Name of the Company (1)'
+  if code is None and company in fields:
+   code='BSE_Code_Derived'
+   for row in rows:
+    m=re.search(r'\((\d{6})\)\s*$',str(row[company]))
+    if m:row[code]=m.group(1)
+  pledged=[f for f in fields if 'pledg' in f.lower()]
+  if code and pledged and rows and all(code in r and re.fullmatch(r'\d{6}',str(r[code]).strip()) for r in rows):
+   result['exports']=[export_rows(dest,'pledges_csv_records',rows,[code]+pledged,csv_url,'Official consolidated CSV snapshot (direct API fallback)')]
+   result.update(status='VALIDATED_SNAPSHOT',coverage='Official DownloadPledgeCsv_ng direct fallback; current snapshot',historical_asof_verified=False)
+   return
+ src_url='https://api.bseindia.com/BseIndiaAPI/api/GetCorpPledgeShareholding_ng/w?COMPANY=&Group=&Status=&Industryname=&PledgeRange=&DeriTrade='
+ r=page.evaluate("""async u => {const r=await fetch(u,{headers:{'Accept':'application/json, text/plain, */*'},signal:AbortSignal.timeout(45000)}); return {status:r.status,url:r.url,text:await r.text()};}""",src_url)
+ if r['status']!=200:raise ValueError('Unexpected pledge API response '+str(r['status']))
+ b=r['text'].encode();obj=safe_json_bytes(b)
  rows=require_rows(obj.get('Table') if isinstance(obj,dict) else obj,['ScripCode','CompanyName','Noofsharespledged'])
- result['exports']=[export_rows(dest,'pledges_api_records',rows,['ScripCode','CompanyName','Noofsharespledged'],src_url,'Official consolidated pledge API snapshot (fallback after CSV export timeout); current as-on snapshot, not historical reconstruction')]
- result.update(status='VALIDATED_SNAPSHOT',coverage='Official GetCorpPledgeShareholding_ng JSON fallback; current snapshot, not proof of complete historical coverage for requested date',historical_asof_verified=False)
+ result['exports']=[export_rows(dest,'pledges_api_records',rows,['ScripCode','CompanyName','Noofsharespledged'],src_url,'Official consolidated pledge API snapshot (fallback)')]
+ result.update(status='VALIDATED_SNAPSHOT',coverage='Official GetCorpPledgeShareholding_ng JSON fallback; current snapshot',historical_asof_verified=False)
 
 def transient_error(error):
  if isinstance(error,PermissionError):return False
