@@ -24,18 +24,23 @@ concurrency:
 jobs:
   acquire:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.56.0-noble
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Prepare isolated browser runtime
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv /tmp/market-venv
+          /tmp/market-venv/bin/pip install playwright==1.56.0
 
       - name: Acquire exact eligible final files once
         env:
           REPORT_DATE: ${{ inputs.report_date }}
-        run: python -m nse_automation.market_data
+        run: PYTHONPATH="$GITHUB_WORKSPACE" xvfb-run --auto-servernum /tmp/market-venv/bin/python -m nse_automation.market_data
 
       - name: Optional verified Drive handoff
         if: always()
