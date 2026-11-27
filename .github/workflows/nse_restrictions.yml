@@ -9,16 +9,18 @@ on:
   push:
     paths: ['nse_automation/**', '.github/workflows/nse_restrictions.yml']
   schedule:
-    # SOP starts in IST: 08:30 weekdays, 16:30 weekdays, 22:00 daily, Saturday 08:00.
-    - cron: '0 3 * * 1-5'
-    - cron: '0 11 * * 1-5'
-    - cron: '30 16 * * *'
-    - cron: '30 2 * * 6'
+    # Buffered odd-minute schedules (IST): 20:47 daily (after 20:35 NSE window), 07:52 weekdays, 06:33 Saturday
+    - cron: '17 15 * * *'
+    - cron: '22 2 * * 1-5'
+    - cron: '3 1 * * 6'
+
 permissions:
   contents: read
+
 concurrency:
   group: nse-restrictions-${{ github.ref }}
   cancel-in-progress: false
+
 jobs:
   acquire:
     runs-on: ubuntu-latest
@@ -30,6 +32,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+
       - name: Create isolated Python environment
         run: |
           apt-get update
@@ -37,8 +40,10 @@ jobs:
           python3 -m venv /tmp/nse-venv
           /tmp/nse-venv/bin/python -m pip install playwright==1.56.0
           echo '/tmp/nse-venv/bin' >> "$GITHUB_PATH"
+
       - name: Validate calendar and interpretation before acquisition
         run: PYTHONPATH=. python -m unittest discover -s tests -p 'test_nse_*.py'
+
       - name: Download exact dated reports once
         env:
           REPORT_DATE: ${{ inputs.report_date }}
@@ -46,6 +51,7 @@ jobs:
           args=()
           if [ -n "$REPORT_DATE" ]; then args+=(--date "$REPORT_DATE"); fi
           xvfb-run --auto-servernum python nse_automation/download.py "${args[@]}"
+
       - name: Optional verified Drive handoff
         if: always()
         continue-on-error: true
@@ -61,6 +67,7 @@ jobs:
           else
             python3 -m titan.drive_sync --root nse-output
           fi
+
       - name: Deliver and verify via Drive OAuth
         if: always()
         continue-on-error: true
@@ -72,6 +79,7 @@ jobs:
         uses: ./.github/actions/drive-oauth
         with:
           root: nse-output
+
       - name: Preserve successful files and all failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -80,4 +88,3 @@ jobs:
           path: nse-output/
           retention-days: 90
           if-no-files-found: error
-
