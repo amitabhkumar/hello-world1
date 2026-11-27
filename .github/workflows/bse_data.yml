@@ -17,10 +17,10 @@ on:
         type: string
         default: all
   schedule:
-    - cron: '0 3 * * 1-5'
-    - cron: '0 11 * * 1-5'
-    - cron: '30 16 * * *'
-    - cron: '30 2 * * 6'
+    - cron: '20 2 * * *'      # 07:50 IST Daily (Morning: gated by calendar/special_sessions)
+    - cron: '30 10 * * *'     # 16:00 IST Daily (Post-market: gated by calendar/special_sessions)
+    - cron: '25 15 * * *'     # 20:55 IST Daily (Evening discovery: runs daily per SOP V3.0)
+    - cron: '0 1 * * 6'       # 06:30 IST Sat   (Weekly refresh: shareholding, var_margin, calendar)
 permissions:
   contents: read
   actions: read
@@ -33,19 +33,77 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve SOP V3.0 schedule and calendar gate
+        id: gate
+        env:
+          INPUT_DATASETS: ${{ inputs.datasets }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_CRON: ${{ github.event.schedule }}
+        run: |
+          python - <<'PYCODE'
+          import json, os
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          IST = ZoneInfo('Asia/Kolkata')
+          today = datetime.now(IST).date()
+          today_str = today.isoformat()
+
+          holidays, special = set(), set()
+          for f in sorted(Path('titan/calendars').glob('*.json')):
+              c = json.loads(f.read_text())
+              holidays.update(c.get('holidays', []))
+              special.update(c.get('special_sessions', []))
+
+          is_trading_day = (today_str in special) or (today.weekday() < 5 and today_str not in holidays)
+          event_name = os.getenv('EVENT_NAME', '')
+          cron = os.getenv('EVENT_CRON', '')
+          manual_ds = os.getenv('INPUT_DATASETS', '').strip()
+
+          should_run = True
+          selected = manual_ds or 'all'
+
+          if event_name == 'schedule' and not manual_ds:
+              if cron == '20 2 * * *':
+                  selected = 'announcements'
+                  should_run = is_trading_day
+              elif cron == '30 10 * * *':
+                  selected = 'market_quotes,announcements'
+                  should_run = is_trading_day
+              elif cron == '25 15 * * *':
+                  selected = 'announcements,delivery,bulk_block,corporate_actions,asm,gsm,pledges,high_low,breadth,regulatory_files,security_master,price_bands'
+                  should_run = True
+              elif cron == '0 1 * * 6':
+                  selected = 'shareholding,var_margin,calendar'
+                  should_run = True
+
+          print(f"Date={today_str} TradingDay={is_trading_day} Cron='{cron}' ShouldRun={should_run} Datasets={selected}")
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f"should_run={'true' if should_run else 'false'}\n")
+              out.write(f"datasets={selected}\n")
+          PYCODE
       - name: Restore immutable original-filings cache
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/cache/restore@v4
         with:
           path: bse_original_cache
           key: bse-originals-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: bse-originals-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m unittest discover -s tests -v
-      - run: pip install -r requirements-bse.txt
-      - run: python -m playwright install --with-deps chromium
+      - name: Run unit tests
+        if: steps.gate.outputs.should_run == 'true'
+        run: python -m unittest discover -s tests -v
+      - name: Install dependencies
+        if: steps.gate.outputs.should_run == 'true'
+        run: pip install -r requirements-bse.txt
+      - name: Install Playwright Chromium
+        if: steps.gate.outputs.should_run == 'true'
+        run: python -m playwright install --with-deps chromium
       - name: Resolve optional saved-artifact continuation
+        if: steps.gate.outputs.should_run == 'true'
         env:
           REQUESTED_RESUME_RUN: ${{ inputs.resume_run_id }}
         run: |
@@ -67,7 +125,7 @@ jobs:
                   out.write('BSE_RESUME_DIRECTORY=bse_original_cache\nBSE_CACHE_SOURCE_RUN_ID='+str(origin)+'\n')
           PYCODE
       - name: Restore completed artifact for immutable-original reuse
-        if: env.BSE_RESUME_RUN_ID != ''
+        if: steps.gate.outputs.should_run == 'true' && env.BSE_RESUME_RUN_ID != ''
         uses: actions/download-artifact@v4
         with:
           name: bse-data-${{ env.BSE_RESUME_RUN_ID }}-1
@@ -75,17 +133,18 @@ jobs:
           run-id: ${{ env.BSE_RESUME_RUN_ID }}
           github-token: ${{ github.token }}
       - name: Collect each dataset with explicit status
+        if: steps.gate.outputs.should_run == 'true'
         env:
           REPORT_DATE: ${{ inputs.report_date }}
           BSE_DIAGNOSTIC_SINGLE_PASS: ${{ github.event_name == 'workflow_dispatch' && inputs.datasets == 'announcements,pledges' && '1' || '0' }}
-          DATASETS: ${{ inputs.datasets }}
+          DATASETS: ${{ steps.gate.outputs.datasets }}
         shell: bash
         run: |
           args=(--datasets "${DATASETS:-all}")
           if [ -n "$REPORT_DATE" ]; then args+=(--date "$REPORT_DATE"); fi
           xvfb-run --auto-servernum python -m titan.bse_data "${args[@]}"
       - name: Prepare verified originals for next unattended run
-        if: always()
+        if: always() && steps.gate.outputs.should_run == 'true'
         id: originals
         run: |
           python - <<'PYCODE'
@@ -109,13 +168,13 @@ jobs:
               with open(os.environ['GITHUB_OUTPUT'],'a') as out:out.write('ready=true\n')
           PYCODE
       - name: Save immutable originals for unattended reuse
-        if: always() && steps.originals.outputs.ready == 'true'
+        if: always() && steps.gate.outputs.should_run == 'true' && steps.originals.outputs.ready == 'true'
         uses: actions/cache/save@v4
         with:
           path: bse_original_cache
           key: bse-originals-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Deliver and verify via Drive OAuth
-        if: always()
+        if: always() && steps.gate.outputs.should_run == 'true'
         continue-on-error: true
         env:
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
@@ -126,7 +185,7 @@ jobs:
         with:
           root: bse_data_output
       - name: Preserve all successes and failures
-        if: always()
+        if: always() && steps.gate.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bse-data-${{ github.run_id }}-${{ github.run_attempt }}
