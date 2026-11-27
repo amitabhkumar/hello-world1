@@ -31,7 +31,7 @@ class DatePolicy(unittest.TestCase):
   content=pathlib.Path(".github/workflows/nse_deals_recovery.yml").read_text()
   self.assertNotIn('or "2026-11-04"',content)
   self.assertNotIn("default: '2026-11-04'",content)
-  for cron in ("0 3 * * 1-5","0 11 * * 1-5","30 16 * * *","30 2 * * 6"):
+  for cron in ("19 15 * * *","24 2 * * 1-5","5 1 * * 6"):
    self.assertIn(cron,content)
   self.assertIn('retry_policy":"NONE"',content)
  def test_date_case_and_mixed_date(self):
