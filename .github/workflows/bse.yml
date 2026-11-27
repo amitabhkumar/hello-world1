@@ -9,16 +9,18 @@ on:
         type: string
         required: false
   schedule:
-    # SOP starts in IST: 08:30 weekdays, 16:30 weekdays, 22:00 daily, Saturday 08:00.
-    - cron: '0 3 * * 1-5'
-    - cron: '0 11 * * 1-5'
-    - cron: '30 16 * * *'
-    - cron: '30 2 * * 6'
+    # Buffered odd-minute schedules (IST): 20:53 daily, 07:58 weekdays, 06:39 Saturday
+    - cron: '23 15 * * *'
+    - cron: '28 2 * * 1-5'
+    - cron: '9 1 * * 6'
+
 permissions:
   contents: read
+
 concurrency:
   group: bse-bhavcopy-${{ github.ref }}
   cancel-in-progress: false
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -29,6 +31,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -v
+
   download:
     if: github.event_name != 'push' || contains(github.event.head_commit.message, '[bse-live]')
     needs: validate
@@ -66,7 +69,6 @@ jobs:
           fi
       - name: Deliver and verify via Drive OAuth
         if: always()
-        continue-on-error: true
         env:
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
@@ -83,5 +85,3 @@ jobs:
           path: output/
           if-no-files-found: error
           retention-days: 7
-
-
