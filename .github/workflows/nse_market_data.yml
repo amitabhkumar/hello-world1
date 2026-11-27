@@ -9,28 +9,34 @@ on:
   push:
     paths: ['nse_automation/market_data.py', '.github/workflows/nse_market_data.yml']
   schedule:
-    - cron: '0 3 * * 1-5'
-    - cron: '0 11 * * 1-5'
-    - cron: '30 16 * * *'
-    - cron: '30 2 * * 6'
+    # Buffered odd-minute schedules (IST): 20:51 daily (after 20:35 NSE window), 07:56 weekdays, 06:37 Saturday
+    - cron: '21 15 * * *'
+    - cron: '26 2 * * 1-5'
+    - cron: '7 1 * * 6'
+
 permissions:
   contents: read
+
 concurrency:
   group: nse-final-market-data
   cancel-in-progress: false
+
 jobs:
   acquire:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Acquire exact eligible final files once
         env:
           REPORT_DATE: ${{ inputs.report_date }}
         run: python -m nse_automation.market_data
+
       - name: Optional verified Drive handoff
         if: always()
         continue-on-error: true
@@ -46,10 +52,22 @@ jobs:
           else
             python3 -m titan.drive_sync --root nse-market-output
           fi
+
+      - name: Deliver and verify via Drive OAuth
+        if: always()
+        continue-on-error: true
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_INCOMING_FOLDER_ID: ${{ secrets.GDRIVE_INCOMING_FOLDER_ID }}
+        uses: ./.github/actions/drive-oauth
+        with:
+          root: nse-market-output
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: nse-market-${{ github.run_id }}-${{ github.run_attempt }}
           path: nse-market-output/
           retention-days: 90
-
