@@ -155,7 +155,7 @@ def pledge_csv(page,target,dest,result):
 
 def pledge_json_fallback(page,dest,responses,result):
  csv_url='https://api.bseindia.com/BseIndiaAPI/api/DownloadPledgeCsv_ng/w?COMPANY=&Group=&Status=&Industryname=&PledgeRange=&DeriTrade='
- x=page.evaluate("""async u => {const r=await fetch(u,{headers:{'Accept':'text/csv, */*'},signal:AbortSignal.timeout(45000)}); return {status:r.status,url:r.url,text:await r.text()};}""",csv_url)
+ x=page.evaluate("""async u => {const r=await fetch(u,{headers:{'Accept':'text/csv, */*'},signal:AbortSignal.timeout(90000)}); return {status:r.status,url:r.url,text:await r.text()};}""",csv_url)
  if x['status']==200 and x['text'] and not x['text'].lstrip().startswith('<'):
   body=x['text'].encode('utf-8-sig');name='pledges_official.csv';write_blob(dest,name,body)
   text,encoding=decode_reference(body);reader=csv.DictReader(io.StringIO(text));rows=list(reader)
@@ -173,7 +173,7 @@ def pledge_json_fallback(page,dest,responses,result):
    result.update(status='VALIDATED_SNAPSHOT',coverage='Official DownloadPledgeCsv_ng direct fallback; current snapshot',historical_asof_verified=False)
    return
  src_url='https://api.bseindia.com/BseIndiaAPI/api/GetCorpPledgeShareholding_ng/w?COMPANY=&Group=&Status=&Industryname=&PledgeRange=&DeriTrade='
- r=page.evaluate("""async u => {const r=await fetch(u,{headers:{'Accept':'application/json, text/plain, */*'},signal:AbortSignal.timeout(45000)}); return {status:r.status,url:r.url,text:await r.text()};}""",src_url)
+ r=page.evaluate("""async u => {const r=await fetch(u,{headers:{'Accept':'application/json, text/plain, */*'},signal:AbortSignal.timeout(90000)}); return {status:r.status,url:r.url,text:await r.text()};}""",src_url)
  if r['status']!=200:raise ValueError('Unexpected pledge API response '+str(r['status']))
  b=r['text'].encode();obj=safe_json_bytes(b)
  rows=require_rows(obj.get('Table') if isinstance(obj,dict) else obj,['ScripCode','CompanyName','Noofsharespledged'])
@@ -183,7 +183,7 @@ def pledge_json_fallback(page,dest,responses,result):
 def transient_error(error):
  if isinstance(error,PermissionError):return False
  text=str(error).lower()
- return any(word in text for word in ('failed to fetch','timeout','timed out','connection reset','connection closed','net::err_','response 500','response 502','response 503','response 504'))
+ return any(word in text for word in ('failed to fetch','timeout','timed out','connection reset','connection closed','net::err_','response 500','response 502','response 503','response 504','execution context was destroyed'))
 
 def bounded_attempt(operation,attempts,page,history,label):
  for attempt in range(1,attempts+1):
