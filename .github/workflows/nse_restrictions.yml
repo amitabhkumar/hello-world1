@@ -9,10 +9,9 @@ on:
   push:
     paths: ['nse_automation/**', '.github/workflows/nse_restrictions.yml']
   schedule:
-    # Buffered odd-minute schedules (IST): 20:47 daily (after 20:35 NSE window), 07:52 weekdays, 06:33 Saturday
-    - cron: '17 15 * * *'
-    - cron: '22 2 * * 1-5'
-    - cron: '3 1 * * 6'
+    - cron: '41 2 * * 1-5'   # 08:11 IST Mon-Fri (Morning Scan 08:30)
+    - cron: '9 16 * * *'     # 21:39 IST Daily   (Evening Scan 22:00)
+    - cron: '9 2 * * 6'      # 07:39 IST Sat     (Weekly Review 08:00)
 
 permissions:
   contents: read
