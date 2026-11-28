@@ -9,10 +9,9 @@ on:
   push:
     paths: ['.github/workflows/nse_deals_recovery.yml']
   schedule:
-    # Buffered odd-minute schedules (IST): 20:49 daily (after 20:35 NSE window), 07:54 weekdays, 06:35 Saturday
-    - cron: '19 15 * * *'
-    - cron: '24 2 * * 1-5'
-    - cron: '5 1 * * 6'
+    - cron: '43 2 * * 1-5'   # 08:13 IST Mon-Fri (Morning Scan 08:30)
+    - cron: '11 16 * * *'    # 21:41 IST Daily   (Evening Scan 22:00)
+    - cron: '11 2 * * 6'     # 07:41 IST Sat     (Weekly Review 08:00)
 
 permissions:
   contents: read
