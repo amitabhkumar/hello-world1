@@ -9,10 +9,9 @@ on:
         type: string
         required: false
   schedule:
-    # Buffered odd-minute schedules (IST): 20:53 daily, 07:58 weekdays, 06:39 Saturday
-    - cron: '23 15 * * *'
-    - cron: '28 2 * * 1-5'
-    - cron: '9 1 * * 6'
+    - cron: '37 2 * * 1-5'   # 08:07 IST Mon-Fri (Morning Scan 08:30)
+    - cron: '5 16 * * *'     # 21:35 IST Daily   (Evening Scan 22:00)
+    - cron: '5 2 * * 6'      # 07:35 IST Sat     (Weekly Review 08:00)
 
 permissions:
   contents: read
