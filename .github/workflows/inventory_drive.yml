@@ -1,0 +1,25 @@
+name: Inventory Market_Data Incoming vs Historical (Read-Only)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Generate read-only inventory & delta CSVs
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_INCOMING_FOLDER_ID: ${{ secrets.GDRIVE_INCOMING_FOLDER_ID }}
+        run: python -u titan/inventory_drive.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drive-inventory-report
+          path: inventory_output/
