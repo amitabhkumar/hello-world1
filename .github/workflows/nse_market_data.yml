@@ -9,10 +9,9 @@ on:
   push:
     paths: ['nse_automation/market_data.py', '.github/workflows/nse_market_data.yml']
   schedule:
-    # Buffered odd-minute schedules (IST): 20:51 daily (after 20:35 NSE window), 07:56 weekdays, 06:37 Saturday
-    - cron: '21 15 * * *'
-    - cron: '26 2 * * 1-5'
-    - cron: '7 1 * * 6'
+    - cron: '39 2 * * 1-5'   # 08:09 IST Mon-Fri (Morning Scan 08:30)
+    - cron: '7 16 * * *'     # 21:37 IST Daily   (Evening Scan 22:00)
+    - cron: '7 2 * * 6'      # 07:37 IST Sat     (Weekly Review 08:00)
 
 permissions:
   contents: read
