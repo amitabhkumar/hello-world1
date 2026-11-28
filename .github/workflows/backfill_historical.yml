@@ -1,0 +1,31 @@
+name: Backfill Market_Data Historical (45 Trading Days)
+
+on:
+  workflow_dispatch:
+    inputs:
+      trading_days:
+        description: "Number of recent NSE/BSE trading days to backfill"
+        required: true
+        default: "45"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Download & upload 45 trading days to Market_Data/Historical
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_INCOMING_FOLDER_ID: ${{ secrets.GDRIVE_INCOMING_FOLDER_ID }}
+          TRADING_DAYS: ${{ github.event.inputs.trading_days || '45' }}
+        run: python titan/backfill_historical.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: historical-backfill-manifest
+          path: historical_output/
