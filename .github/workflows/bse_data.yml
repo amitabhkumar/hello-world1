@@ -20,7 +20,7 @@ on:
     - cron: '35 2 * * *'      # 08:05 IST Daily (Morning: gated by calendar/special_sessions)
     - cron: '37 10 * * *'     # 16:07 IST Daily (Post-market: gated by calendar/special_sessions)
     - cron: '51 15 * * *'     # 21:21 IST Daily (Evening discovery: runs daily per SOP V3.0)
-    - cron: '51 1 * * 6'      # 07:21 IST Sat   (Weekly refresh: shareholding, var_margin, calendar)
+    - cron: '21 1 * * 6'      # 06:51 IST Sat   (Weekly refresh: shareholding, var_margin, calendar)
 
 permissions:
   contents: read
@@ -80,7 +80,7 @@ jobs:
               elif cron == '51 15 * * *':
                   selected = 'announcements,delivery,bulk_block,corporate_actions,asm,gsm,pledges,high_low,breadth,regulatory_files,security_master,price_bands'
                   should_run = True
-              elif cron == '51 1 * * 6':
+              elif cron == '21 1 * * 6':
                   selected = 'shareholding,var_margin,calendar'
                   should_run = True
 
